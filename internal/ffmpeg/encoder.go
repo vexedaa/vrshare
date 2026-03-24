@@ -2,6 +2,7 @@ package ffmpeg
 
 import (
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -28,6 +29,19 @@ func ResolveEncoder(encoder string, probe ProbeFunc) string {
 	}
 
 	return "cpu"
+}
+
+// ProbeDDAgrab checks if FFmpeg supports the ddagrab input device
+// by running ffmpeg -devices and looking for "ddagrab" in the output.
+func ProbeDDAgrab(ffmpegPath string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	out, err := exec.Command(ffmpegPath, "-hide_banner", "-devices").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "ddagrab")
 }
 
 // ProbeFFmpegEncoder runs ffmpeg -encoders once and returns a probe function

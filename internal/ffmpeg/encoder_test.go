@@ -1,6 +1,7 @@
 package ffmpeg
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -63,5 +64,23 @@ func TestResolveEncoder_AutoPriority(t *testing.T) {
 	enc := ResolveEncoder("auto", probe)
 	if enc != "nvenc" {
 		t.Errorf("auto with all available should pick nvenc, got %q", enc)
+	}
+}
+
+func TestProbeDDAgrab_Available(t *testing.T) {
+	probe := func(output string) bool {
+		return strings.Contains(output, "ddagrab")
+	}
+	if !probe("  D  ddagrab           Desktop Duplication API") {
+		t.Error("should detect ddagrab in devices output")
+	}
+}
+
+func TestProbeDDAgrab_NotAvailable(t *testing.T) {
+	probe := func(output string) bool {
+		return strings.Contains(output, "ddagrab")
+	}
+	if probe("  D  gdigrab           GDI API Windows frame grabber") {
+		t.Error("should not detect ddagrab when not listed")
 	}
 }
