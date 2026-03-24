@@ -53,6 +53,19 @@ func main() {
 	resolvedEncoder := ffmpeg.ResolveEncoder(string(cfg.Encoder), probe)
 	log.Printf("Using encoder: %s", resolvedEncoder)
 
+	// Probe for ddagrab (DXGI Desktop Duplication) support
+	useDDAgrab := ffmpeg.ProbeDDAgrab(ffmpegPath)
+	if useDDAgrab {
+		log.Println("Using ddagrab (DXGI Desktop Duplication) for capture")
+	} else {
+		log.Println("Using gdigrab for capture (ddagrab not available)")
+	}
+
+	// Warn if resolution scaling is set with GPU encoder + ddagrab
+	if useDDAgrab && cfg.Resolution != "" && resolvedEncoder != "cpu" {
+		log.Printf("Warning: --resolution is ignored with GPU encoder + ddagrab. Use native resolution or --encoder cpu.")
+	}
+
 	// Create temp directory for segments
 	segmentDir, err := os.MkdirTemp("", "vrshare-*")
 	if err != nil {
@@ -122,7 +135,7 @@ func main() {
 
 	// Build and run FFmpeg
 	manager := ffmpeg.NewManager(ffmpegPath, segmentDir)
-	args := ffmpeg.BuildArgs(cfg, resolvedEncoder, segmentDir)
+	args := ffmpeg.BuildArgs(cfg, resolvedEncoder, segmentDir, useDDAgrab)
 
 	err = manager.Run(ctx, args)
 
