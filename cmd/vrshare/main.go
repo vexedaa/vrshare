@@ -59,6 +59,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error creating temp dir: %v\n", err)
 		os.Exit(1)
 	}
+	defer os.RemoveAll(segmentDir)
 
 	// Setup context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -68,6 +69,7 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		<-sigCh
+		signal.Stop(sigCh)
 		log.Println("Shutting down...")
 		cancel()
 	}()
@@ -129,8 +131,9 @@ func main() {
 	if tun != nil {
 		tun.Stop()
 	}
-	httpServer.Shutdown(context.Background())
-	manager.Cleanup()
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutCancel()
+	httpServer.Shutdown(shutCtx)
 
 	if err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
