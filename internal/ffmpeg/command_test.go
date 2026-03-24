@@ -9,7 +9,7 @@ import (
 
 func TestBuildArgs_Defaults(t *testing.T) {
 	cfg := config.Default()
-	args := BuildArgs(cfg, "cpu", "/tmp/vrshare")
+	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
 
 	assertContains(t, args, "-f", "gdigrab")
 	assertContains(t, args, "-framerate", "30")
@@ -27,7 +27,7 @@ func TestBuildArgs_CustomFPSAndBitrate(t *testing.T) {
 	cfg := config.Default()
 	cfg.FPS = 60
 	cfg.Bitrate = 6000
-	args := BuildArgs(cfg, "cpu", "/tmp/vrshare")
+	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
 
 	assertContains(t, args, "-framerate", "60")
 	assertContains(t, args, "-b:v", "6000k")
@@ -37,14 +37,14 @@ func TestBuildArgs_CustomFPSAndBitrate(t *testing.T) {
 func TestBuildArgs_WithResolution(t *testing.T) {
 	cfg := config.Default()
 	cfg.Resolution = "1280x720"
-	args := BuildArgs(cfg, "cpu", "/tmp/vrshare")
+	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
 
 	assertContains(t, args, "-vf", "scale=1280:720")
 }
 
 func TestBuildArgs_NVENCEncoder(t *testing.T) {
 	cfg := config.Default()
-	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare")
+	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", false)
 
 	assertContains(t, args, "-c:v", "h264_nvenc")
 	assertContains(t, args, "-preset", "p4")
@@ -53,7 +53,7 @@ func TestBuildArgs_NVENCEncoder(t *testing.T) {
 
 func TestBuildArgs_QSVEncoder(t *testing.T) {
 	cfg := config.Default()
-	args := BuildArgs(cfg, "qsv", "/tmp/vrshare")
+	args := BuildArgs(cfg, "qsv", "/tmp/vrshare", false)
 
 	assertContains(t, args, "-c:v", "h264_qsv")
 	assertContains(t, args, "-preset", "veryfast")
@@ -61,7 +61,7 @@ func TestBuildArgs_QSVEncoder(t *testing.T) {
 
 func TestBuildArgs_AMFEncoder(t *testing.T) {
 	cfg := config.Default()
-	args := BuildArgs(cfg, "amf", "/tmp/vrshare")
+	args := BuildArgs(cfg, "amf", "/tmp/vrshare", false)
 
 	assertContains(t, args, "-c:v", "h264_amf")
 	assertContains(t, args, "-quality", "speed")
@@ -69,7 +69,7 @@ func TestBuildArgs_AMFEncoder(t *testing.T) {
 
 func TestBuildArgs_CPUEncoder(t *testing.T) {
 	cfg := config.Default()
-	args := BuildArgs(cfg, "cpu", "/tmp/vrshare")
+	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
 
 	assertContains(t, args, "-c:v", "libx264")
 	assertContains(t, args, "-preset", "veryfast")
@@ -79,7 +79,7 @@ func TestBuildArgs_CPUEncoder(t *testing.T) {
 func TestBuildArgs_OutputPaths(t *testing.T) {
 	cfg := config.Default()
 	dir := t.TempDir()
-	args := BuildArgs(cfg, "cpu", dir)
+	args := BuildArgs(cfg, "cpu", dir, false)
 
 	expectedSeg := filepath.Join(dir, "segment_%d.ts")
 	assertContains(t, args, "-hls_segment_filename", expectedSeg)
@@ -88,6 +88,52 @@ func TestBuildArgs_OutputPaths(t *testing.T) {
 	if args[len(args)-1] != expectedPlaylist {
 		t.Errorf("last arg should be playlist path, got %q", args[len(args)-1])
 	}
+}
+
+func TestBuildArgs_DDAgrab_GPUEncoder(t *testing.T) {
+	cfg := config.Default()
+	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
+	assertContains(t, args, "-f", "ddagrab")
+	assertContains(t, args, "-i", "0")
+	assertContains(t, args, "-c:v", "h264_nvenc")
+	assertNotContains(t, args, "-vf")
+}
+
+func TestBuildArgs_DDAgrab_CPUEncoder(t *testing.T) {
+	cfg := config.Default()
+	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", true)
+	assertContains(t, args, "-f", "ddagrab")
+	assertContains(t, args, "-i", "0")
+	assertContains(t, args, "-c:v", "libx264")
+	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p")
+}
+
+func TestBuildArgs_DDAgrab_CPUEncoder_WithResolution(t *testing.T) {
+	cfg := config.Default()
+	cfg.Resolution = "1280x720"
+	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", true)
+	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p,scale=1280:720")
+}
+
+func TestBuildArgs_DDAgrab_GPUEncoder_IgnoresResolution(t *testing.T) {
+	cfg := config.Default()
+	cfg.Resolution = "1280x720"
+	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
+	assertNotContains(t, args, "-vf")
+}
+
+func TestBuildArgs_DDAgrab_MonitorIndex(t *testing.T) {
+	cfg := config.Default()
+	cfg.Monitor = 2
+	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
+	assertContains(t, args, "-i", "2")
+}
+
+func TestBuildArgs_GdigrabFallback(t *testing.T) {
+	cfg := config.Default()
+	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
+	assertContains(t, args, "-f", "gdigrab")
+	assertContains(t, args, "-i", "desktop")
 }
 
 func assertContains(t *testing.T, args []string, key, value string) {
