@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bnjmn/vrshare/internal/config"
+	"github.com/vexedaa/vrshare/internal/config"
 )
 
 func main() {
