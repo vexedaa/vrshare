@@ -8,6 +8,35 @@ import (
 	"time"
 )
 
+const playerHTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VRShare</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#111;display:flex;align-items:center;justify-content:center;height:100vh}
+video{max-width:100%;max-height:100vh}
+</style>
+</head>
+<body>
+<video id="v" controls autoplay muted></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+var video=document.getElementById("v");
+if(Hls.isSupported()){
+  var hls=new Hls({liveSyncDurationCount:2,liveMaxLatencyDurationCount:4});
+  hls.loadSource("/stream.m3u8");
+  hls.attachMedia(video);
+  hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play()});
+}else if(video.canPlayType("application/vnd.apple.mpegurl")){
+  video.src="/stream.m3u8";
+}
+</script>
+</body>
+</html>`
+
 type Server struct {
 	dir string
 }
@@ -24,6 +53,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Serve test player page at root
+	if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(playerHTML))
 		return
 	}
 

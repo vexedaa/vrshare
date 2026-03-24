@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,5 +108,29 @@ func TestServer_OnlyServesAllowedExtensions(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("should reject non-HLS files, got %d", w.Code)
+	}
+}
+
+func TestServer_ServesPlayerPage(t *testing.T) {
+	dir := t.TempDir()
+
+	srv := NewServer(dir)
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if ct != "text/html; charset=utf-8" {
+		t.Errorf("expected text/html content type, got %q", ct)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "hls.js") {
+		t.Error("player page should reference hls.js")
+	}
+	if !strings.Contains(body, "stream.m3u8") {
+		t.Error("player page should reference stream.m3u8")
 	}
 }
