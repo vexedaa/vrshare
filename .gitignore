@@ -1,0 +1,19 @@
+# Binaries
+vrshare
+vrshare.exe
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+
+# Superpowers brainstorm artifacts
+.superpowers/
