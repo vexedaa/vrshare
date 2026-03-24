@@ -1,6 +1,6 @@
 # Binaries
-vrshare
-vrshare.exe
+/vrshare
+/vrshare.exe
 *.exe
 
 # IDE
