@@ -30,12 +30,15 @@ func ResolveEncoder(encoder string, probe ProbeFunc) string {
 	return "cpu"
 }
 
+// ProbeFFmpegEncoder runs ffmpeg -encoders once and returns a probe function
+// that checks the cached output for each encoder name.
 func ProbeFFmpegEncoder(ffmpegPath string) ProbeFunc {
+	out, err := exec.Command(ffmpegPath, "-hide_banner", "-encoders").Output()
+	if err != nil {
+		return func(encoder string) bool { return false }
+	}
+	encoderList := string(out)
 	return func(encoder string) bool {
-		out, err := exec.Command(ffmpegPath, "-hide_banner", "-encoders").Output()
-		if err != nil {
-			return false
-		}
-		return strings.Contains(string(out), encoder)
+		return strings.Contains(encoderList, encoder)
 	}
 }
