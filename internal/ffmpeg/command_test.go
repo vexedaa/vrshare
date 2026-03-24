@@ -93,8 +93,8 @@ func TestBuildArgs_OutputPaths(t *testing.T) {
 func TestBuildArgs_DDAgrab_GPUEncoder(t *testing.T) {
 	cfg := config.Default()
 	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
-	assertContains(t, args, "-f", "ddagrab")
-	assertContains(t, args, "-i", "0")
+	assertContains(t, args, "-f", "lavfi")
+	assertContains(t, args, "-i", "ddagrab=output_idx=0:framerate=30")
 	assertContains(t, args, "-c:v", "h264_nvenc")
 	assertNotContains(t, args, "-vf")
 }
@@ -102,8 +102,8 @@ func TestBuildArgs_DDAgrab_GPUEncoder(t *testing.T) {
 func TestBuildArgs_DDAgrab_CPUEncoder(t *testing.T) {
 	cfg := config.Default()
 	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", true)
-	assertContains(t, args, "-f", "ddagrab")
-	assertContains(t, args, "-i", "0")
+	assertContains(t, args, "-f", "lavfi")
+	assertContains(t, args, "-i", "ddagrab=output_idx=0:framerate=30")
 	assertContains(t, args, "-c:v", "libx264")
 	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p")
 }
@@ -126,7 +126,15 @@ func TestBuildArgs_DDAgrab_MonitorIndex(t *testing.T) {
 	cfg := config.Default()
 	cfg.Monitor = 2
 	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
-	assertContains(t, args, "-i", "2")
+	assertContains(t, args, "-i", "ddagrab=output_idx=2:framerate=30")
+}
+
+func TestBuildArgs_DDAgrab_CustomFPS(t *testing.T) {
+	cfg := config.Default()
+	cfg.FPS = 60
+	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
+	assertContains(t, args, "-i", "ddagrab=output_idx=0:framerate=60")
+	assertNotContains(t, args, "-framerate")
 }
 
 func TestBuildArgs_GdigrabFallback(t *testing.T) {

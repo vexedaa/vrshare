@@ -31,13 +31,14 @@ func ResolveEncoder(encoder string, probe ProbeFunc) string {
 	return "cpu"
 }
 
-// ProbeDDAgrab checks if FFmpeg supports the ddagrab input device
-// by running ffmpeg -devices and looking for "ddagrab" in the output.
+// ProbeDDAgrab checks if FFmpeg supports the ddagrab filter (DXGI Desktop
+// Duplication). ddagrab is a lavfi source filter, not an input device,
+// so we check -filters rather than -devices.
 func ProbeDDAgrab(ffmpegPath string) bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-	out, err := exec.Command(ffmpegPath, "-hide_banner", "-devices").CombinedOutput()
+	out, err := exec.Command(ffmpegPath, "-hide_banner", "-filters").CombinedOutput()
 	if err != nil {
 		return false
 	}

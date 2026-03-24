@@ -29,18 +29,22 @@ func NewManager(ffmpegPath, segmentDir string) *Manager {
 	}
 }
 
+// FindFFmpeg looks for ffmpeg in the cache directory first (where custom
+// builds with ddagrab support may live), then falls back to PATH.
 func FindFFmpeg() (string, error) {
-	path, err := exec.LookPath("ffmpeg")
-	if err == nil {
-		return path, nil
-	}
-
+	// Check cache dir first (custom builds)
 	cacheDir := defaultCacheDir()
 	if path, err := findFFmpegInDir(cacheDir); err == nil {
 		return path, nil
 	}
 
-	return "", fmt.Errorf("ffmpeg not found on PATH or in %s", cacheDir)
+	// Fall back to PATH
+	path, err := exec.LookPath("ffmpeg")
+	if err == nil {
+		return path, nil
+	}
+
+	return "", fmt.Errorf("ffmpeg not found in %s or on PATH", cacheDir)
 }
 
 func findFFmpegInDir(dir string) (string, error) {

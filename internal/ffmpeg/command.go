@@ -19,7 +19,10 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 	useDD := useDDAgrab && runtime.GOOS == "windows"
 
 	if useDD {
-		args = append(args, "-f", "ddagrab")
+		// ddagrab is a lavfi source filter, not an input device.
+		// Framerate and monitor index are set as filter options.
+		lavfiSrc := fmt.Sprintf("ddagrab=output_idx=%d:framerate=%d", cfg.Monitor, cfg.FPS)
+		args = append(args, "-f", "lavfi", "-i", lavfiSrc)
 	} else {
 		switch runtime.GOOS {
 		case "linux":
@@ -29,13 +32,9 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 		default:
 			args = append(args, "-f", "gdigrab")
 		}
-	}
 
-	args = append(args, "-framerate", fmt.Sprintf("%d", cfg.FPS))
+		args = append(args, "-framerate", fmt.Sprintf("%d", cfg.FPS))
 
-	if useDD {
-		args = append(args, "-i", fmt.Sprintf("%d", cfg.Monitor))
-	} else {
 		switch runtime.GOOS {
 		case "linux":
 			args = append(args, "-i", fmt.Sprintf(":%d.0", cfg.Monitor))
