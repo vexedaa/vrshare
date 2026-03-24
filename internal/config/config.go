@@ -17,13 +17,15 @@ const (
 )
 
 type Config struct {
-	Port       int
-	Tunnel     bool
-	Monitor    int
-	FPS        int
-	Resolution string // "WxH" or "" for native
-	Bitrate    int    // kbps
-	Encoder    EncoderType
+	Port        int
+	Tunnel      bool
+	Monitor     int
+	FPS         int
+	Resolution  string // "WxH" or "" for native
+	Bitrate     int    // kbps
+	Encoder     EncoderType
+	Audio       bool
+	AudioDevice string // DirectShow device name, or "" for auto-detect
 }
 
 func Default() Config {

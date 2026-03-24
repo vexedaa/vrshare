@@ -50,6 +50,11 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 		}
 	}
 
+	// Audio input (DirectShow on Windows)
+	if cfg.Audio && cfg.AudioDevice != "" {
+		args = append(args, "-f", "dshow", "-i", "audio="+cfg.AudioDevice)
+	}
+
 	switch resolvedEncoder {
 	case "nvenc":
 		args = append(args, "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll")
@@ -73,6 +78,11 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 	} else if !useDD && cfg.Resolution != "" {
 		scaled := strings.Replace(cfg.Resolution, "x", ":", 1)
 		args = append(args, "-vf", fmt.Sprintf("scale=%s", scaled))
+	}
+
+	// Audio encoding
+	if cfg.Audio && cfg.AudioDevice != "" {
+		args = append(args, "-c:a", "aac", "-b:a", "128k")
 	}
 
 	gop := fmt.Sprintf("%d", cfg.FPS)

@@ -29,6 +29,8 @@ func main() {
 	flag.StringVar(&cfg.Resolution, "resolution", cfg.Resolution, "Output resolution (WxH, empty for native)")
 	flag.IntVar(&cfg.Bitrate, "bitrate", cfg.Bitrate, "Video bitrate in kbps")
 	encoder := flag.String("encoder", string(cfg.Encoder), "Encoder: auto, nvenc, qsv, amf, cpu")
+	flag.BoolVar(&cfg.Audio, "audio", cfg.Audio, "Enable system audio capture")
+	flag.StringVar(&cfg.AudioDevice, "audio-device", cfg.AudioDevice, "Audio device name (auto-detect if empty)")
 	flag.Parse()
 
 	cfg.Encoder = config.EncoderType(*encoder)
@@ -66,6 +68,20 @@ func main() {
 	// Warn if resolution scaling is set with GPU encoder + ddagrab
 	if useDDAgrab && cfg.Resolution != "" && resolvedEncoder != "cpu" {
 		log.Printf("Warning: --resolution is ignored with GPU encoder + ddagrab. Use native resolution or --encoder cpu.")
+	}
+
+	// Detect audio device if --audio is enabled
+	if cfg.Audio && cfg.AudioDevice == "" {
+		cfg.AudioDevice = ffmpeg.DetectAudioDevice(ffmpegPath)
+		if cfg.AudioDevice != "" {
+			log.Printf("Detected audio device: %s", cfg.AudioDevice)
+		} else {
+			log.Println("Warning: --audio enabled but no loopback device found. Try --audio-device to specify manually.")
+			log.Println("  Enable 'Stereo Mix' in Sound Settings > Recording, or install VB-Audio Virtual Cable.")
+			cfg.Audio = false
+		}
+	} else if cfg.Audio {
+		log.Printf("Using audio device: %s", cfg.AudioDevice)
 	}
 
 	// Create temp directory for segments
