@@ -82,7 +82,7 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 		"-f", "hls",
 		"-hls_time", "1",
 		"-hls_list_size", "3",
-		"-hls_flags", "delete_segments+append_list",
+		"-hls_flags", "append_list",
 		"-hls_segment_filename", filepath.Join(segmentDir, "segment_%d.ts"),
 		filepath.Join(segmentDir, "stream.m3u8"),
 	)

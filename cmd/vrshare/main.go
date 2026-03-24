@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/vexedaa/vrshare/internal/config"
@@ -121,7 +123,12 @@ func main() {
 		if err != nil {
 			log.Printf("Warning: tunnel failed: %v (continuing without tunnel)", err)
 		} else {
-			fmt.Printf("  Tunnel: %s\n", tun.StreamURL())
+			streamURL := tun.StreamURL()
+			fmt.Printf("  Tunnel: %s\n", streamURL)
+			if clipErr := copyToClipboard(streamURL); clipErr == nil {
+				fmt.Println()
+				fmt.Println("Stream URL copied to clipboard!")
+			}
 		}
 	}
 
@@ -165,4 +172,11 @@ func getOutboundIP() string {
 	defer conn.Close()
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP.String()
+}
+
+// copyToClipboard copies text to the system clipboard using clip.exe on Windows.
+func copyToClipboard(text string) error {
+	cmd := exec.Command("clip")
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
 }
