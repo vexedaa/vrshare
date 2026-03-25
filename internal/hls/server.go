@@ -30,7 +30,7 @@ video{max-width:100%;max-height:100vh}
 <script>
 var video=document.getElementById("v");
 if(Hls.isSupported()){
-  var hls=new Hls({liveSyncDurationCount:3,liveMaxLatencyDurationCount:6});
+  var hls=new Hls({liveSyncDurationCount:1,liveMaxLatencyDurationCount:3,lowLatencyMode:true});
   hls.loadSource("/stream.m3u8");
   hls.attachMedia(video);
   hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play()});
