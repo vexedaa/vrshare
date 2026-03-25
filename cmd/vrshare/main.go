@@ -128,12 +128,8 @@ func main() {
 			mp4URL := tun.MP4URL()
 			fmt.Printf("  Tunnel: %s (HLS)\n", hlsURL)
 			fmt.Printf("          %s (MP4)\n", mp4URL)
-			// Tailscale supports long-lived connections, so MP4 works.
-			// Cloudflare kills long connections, so prefer HLS.
-			clipURL := mp4URL
-			if *tunnelProvider == "cloudflare" {
-				clipURL = hlsURL
-			}
+			// HLS is the most reliable format across all players and tunnels.
+			clipURL := hlsURL
 			if clipErr := copyToClipboard(clipURL); clipErr == nil {
 				fmt.Println()
 				fmt.Printf("Stream URL copied to clipboard!\n")
