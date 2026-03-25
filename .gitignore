@@ -14,6 +14,8 @@ Thumbs.db
 
 # Build
 dist/
+frontend/node_modules/
+frontend/dist/
 
 # Superpowers brainstorm artifacts
 .superpowers/
