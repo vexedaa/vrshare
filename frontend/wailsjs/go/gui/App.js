@@ -65,6 +65,14 @@ export function ShowWindow() {
   return window['go']['gui']['App']['ShowWindow']();
 }
 
+export function DownloadFFmpeg() {
+  return window['go']['gui']['App']['DownloadFFmpeg']();
+}
+
+export function HasFFmpeg() {
+  return window['go']['gui']['App']['HasFFmpeg']();
+}
+
 export function GetTunnelProviders() {
   return window['go']['gui']['App']['GetTunnelProviders']();
 }

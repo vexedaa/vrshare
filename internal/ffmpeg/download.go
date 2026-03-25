@@ -44,6 +44,19 @@ func PromptAndDownload() (string, error) {
 	}
 }
 
+// Download downloads FFmpeg automatically (non-interactive).
+// Returns the path to the installed ffmpeg.exe.
+func Download() (string, error) {
+	if runtime.GOOS != "windows" {
+		return "", fmt.Errorf("automatic download not supported on %s", runtime.GOOS)
+	}
+	cacheDir := defaultCacheDir()
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return "", fmt.Errorf("creating cache dir: %w", err)
+	}
+	return downloadWindows(cacheDir)
+}
+
 func downloadWindows(cacheDir string) (string, error) {
 	log.Println("Downloading FFmpeg...")
 

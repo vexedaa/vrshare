@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { StartStream, StopStream, RestartStream, GetState, GetConfig, GetLogEntries, DetectSystem, SwitchMonitor } from '../../wailsjs/go/gui/App';
+  import { StartStream, StopStream, RestartStream, GetState, GetConfig, GetLogEntries, DetectSystem, SwitchMonitor, HasFFmpeg, DownloadFFmpeg } from '../../wailsjs/go/gui/App';
   import { EventsOn, ClipboardSetText } from '../../wailsjs/runtime/runtime';
   import StatsRow from './StatsRow.svelte';
   import EventLog from './EventLog.svelte';
@@ -13,6 +13,9 @@
   let logEntries = [];
   let monitors = [];
   let copied = false;
+  let error = '';
+  let ffmpegMissing = false;
+  let downloading = false;
   let unsubState;
   let unsubLog;
 
@@ -20,6 +23,7 @@
     state = await GetState();
     config = await GetConfig();
     logEntries = (await GetLogEntries()) || [];
+    ffmpegMissing = !(await HasFFmpeg());
     const sysInfo = await DetectSystem();
     monitors = sysInfo.monitors || [];
     unsubState = EventsOn('stream:state', (s) => { state = s; });
@@ -32,12 +36,28 @@
   });
 
   async function start() {
+    error = '';
     try {
       await StartStream();
       state = await GetState();
     } catch (err) {
-      console.error('Start failed:', err);
+      error = err.toString();
+      state = await GetState();
+      // Check if it's an FFmpeg issue
+      ffmpegMissing = !(await HasFFmpeg());
     }
+  }
+
+  async function installFFmpeg() {
+    downloading = true;
+    error = '';
+    try {
+      await DownloadFFmpeg();
+      ffmpegMissing = false;
+    } catch (err) {
+      error = 'FFmpeg download failed: ' + err.toString();
+    }
+    downloading = false;
   }
 
   async function stop() {
@@ -154,6 +174,22 @@
 {:else}
   <div class="flex items-center justify-center min-h-[350px] text-slate-600">
     <div class="text-center">
+      {#if error}
+        <div class="bg-red-900/50 border border-red-700 rounded-md p-4 mb-4 text-red-300 text-sm text-left max-w-md mx-auto">
+          <div class="font-semibold mb-1">Failed to start stream</div>
+          {error}
+        </div>
+      {/if}
+      {#if ffmpegMissing}
+        <div class="bg-yellow-900/30 border border-yellow-700 rounded-md p-4 mb-4 max-w-md mx-auto">
+          <div class="font-semibold text-yellow-300 mb-2">FFmpeg not found</div>
+          <div class="text-sm text-yellow-200/70 mb-3">FFmpeg is required for screen capture and encoding.</div>
+          <button on:click={installFFmpeg} disabled={downloading}
+            class="bg-yellow-600 hover:bg-yellow-500 disabled:bg-yellow-800 text-white font-semibold px-4 py-1.5 rounded-md text-sm transition-colors">
+            {downloading ? 'Downloading...' : 'Download FFmpeg'}
+          </button>
+        </div>
+      {/if}
       <div class="text-3xl mb-2">Ready to stream</div>
       <div class="text-sm">Select a preset and click Start Stream</div>
       <button on:click={() => dispatch('openSettings')} class="text-sky-400 hover:text-sky-300 text-sm mt-4 block mx-auto">

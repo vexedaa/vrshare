@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/vexedaa/vrshare/internal/config"
+	"github.com/vexedaa/vrshare/internal/ffmpeg"
 	"github.com/vexedaa/vrshare/internal/server"
 )
 
@@ -174,6 +175,17 @@ func (a *App) GetSettings() (server.AppSettings, error) {
 // SaveSettings saves app settings.
 func (a *App) SaveSettings(s server.AppSettings) error {
 	return server.SaveSettings(a.dataDir, s)
+}
+
+// DownloadFFmpeg downloads and installs FFmpeg automatically.
+func (a *App) DownloadFFmpeg() (string, error) {
+	return ffmpeg.Download()
+}
+
+// HasFFmpeg checks if FFmpeg is available.
+func (a *App) HasFFmpeg() bool {
+	_, err := ffmpeg.FindFFmpeg()
+	return err == nil
 }
 
 // TunnelProviderStatus describes the state of a tunnel provider.
