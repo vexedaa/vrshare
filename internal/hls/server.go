@@ -180,11 +180,12 @@ func (s *Server) serveMP4(w http.ResponseWriter, r *http.Request) {
 
 	cmd := exec.CommandContext(r.Context(), s.ffmpegPath,
 		"-hide_banner", "-loglevel", "error",
-		"-re",
+		"-fflags", "nobuffer",
 		"-live_start_index", "-1",
 		"-i", hlsURL,
 		"-c", "copy",
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+		"-reset_timestamps", "1",
 		"-f", "mp4",
 		"pipe:1",
 	)
