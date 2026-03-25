@@ -137,6 +137,30 @@ func TestBuildArgs_DDAgrab_CustomFPS(t *testing.T) {
 	assertNotContains(t, args, "-framerate")
 }
 
+func TestBuildArgs_AudioEnabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.Audio = true
+	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
+
+	assertContains(t, args, "-f", "s16le")
+	assertContains(t, args, "-ar", "48000")
+	assertContains(t, args, "-ac", "2")
+	assertContains(t, args, "-i", "pipe:0")
+	assertContains(t, args, "-c:a", "aac")
+	assertContains(t, args, "-b:a", "128k")
+	assertNotContains(t, args, "dshow")
+}
+
+func TestBuildArgs_AudioDisabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.Audio = false
+	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
+
+	assertNotContains(t, args, "s16le")
+	assertNotContains(t, args, "pipe:0")
+	assertNotContains(t, args, "-c:a")
+}
+
 func TestBuildArgs_GdigrabFallback(t *testing.T) {
 	cfg := config.Default()
 	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)

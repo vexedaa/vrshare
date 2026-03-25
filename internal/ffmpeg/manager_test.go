@@ -59,7 +59,7 @@ func TestManager_ContextCancellation(t *testing.T) {
 		SegmentDir: t.TempDir(),
 	}
 
-	err := m.Run(ctx, []string{"-version"})
+	err := m.Run(ctx, []string{"-version"}, nil)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("expected nil or context.Canceled, got: %v", err)
 	}

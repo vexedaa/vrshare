@@ -50,9 +50,9 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 		}
 	}
 
-	// Audio input (DirectShow on Windows)
-	if cfg.Audio && cfg.AudioDevice != "" {
-		args = append(args, "-f", "dshow", "-i", "audio="+cfg.AudioDevice)
+	// Audio input (raw PCM from WASAPI capturer via stdin)
+	if cfg.Audio {
+		args = append(args, "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0")
 	}
 
 	switch resolvedEncoder {
@@ -81,7 +81,7 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 	}
 
 	// Audio encoding
-	if cfg.Audio && cfg.AudioDevice != "" {
+	if cfg.Audio {
 		args = append(args, "-c:a", "aac", "-b:a", "128k")
 	}
 
