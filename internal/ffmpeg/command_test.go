@@ -18,7 +18,7 @@ func TestBuildArgs_Defaults(t *testing.T) {
 	assertContains(t, args, "-b:v", "4000k")
 	assertContains(t, args, "-g", "30")
 	assertContains(t, args, "-f", "hls")
-	assertContains(t, args, "-hls_time", "1")
+	assertContains(t, args, "-hls_time", "2")
 	assertContains(t, args, "-hls_list_size", "3")
 	assertNotContains(t, args, "-vf")
 }
@@ -96,7 +96,7 @@ func TestBuildArgs_DDAgrab_GPUEncoder(t *testing.T) {
 	assertContains(t, args, "-f", "lavfi")
 	assertContains(t, args, "-i", "ddagrab=output_idx=0:framerate=30")
 	assertContains(t, args, "-c:v", "h264_nvenc")
-	assertNotContains(t, args, "-vf")
+	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p")
 }
 
 func TestBuildArgs_DDAgrab_CPUEncoder(t *testing.T) {
@@ -115,11 +115,11 @@ func TestBuildArgs_DDAgrab_CPUEncoder_WithResolution(t *testing.T) {
 	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p,scale=1280:720")
 }
 
-func TestBuildArgs_DDAgrab_GPUEncoder_IgnoresResolution(t *testing.T) {
+func TestBuildArgs_DDAgrab_GPUEncoder_WithResolution(t *testing.T) {
 	cfg := config.Default()
 	cfg.Resolution = "1280x720"
 	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
-	assertNotContains(t, args, "-vf")
+	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p,scale=1280:720")
 }
 
 func TestBuildArgs_DDAgrab_MonitorIndex(t *testing.T) {

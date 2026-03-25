@@ -57,25 +57,31 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 
 	switch resolvedEncoder {
 	case "nvenc":
-		args = append(args, "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll")
+		args = append(args, "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll",
+			"-profile:v", "baseline", "-level", "4.0")
 	case "qsv":
-		args = append(args, "-c:v", "h264_qsv", "-preset", "veryfast")
+		args = append(args, "-c:v", "h264_qsv", "-preset", "veryfast",
+			"-profile:v", "baseline", "-level", "4.0")
 	case "amf":
-		args = append(args, "-c:v", "h264_amf", "-quality", "speed")
+		args = append(args, "-c:v", "h264_amf", "-quality", "speed",
+			"-profile:v", "baseline", "-level", "4.0")
 	default:
-		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency")
+		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+			"-profile:v", "baseline", "-level", "4.0")
 	}
 
 	args = append(args, "-b:v", fmt.Sprintf("%dk", cfg.Bitrate))
 
-	if useDD && !isGPUEncoder(resolvedEncoder) {
+	// Video filter chain: ddagrab outputs D3D11 hardware frames which need
+	// hwdownload for any software processing (scaling, format conversion).
+	if useDD {
 		vf := "hwdownload,format=bgra,format=yuv420p"
 		if cfg.Resolution != "" {
 			scaled := strings.Replace(cfg.Resolution, "x", ":", 1)
 			vf += ",scale=" + scaled
 		}
 		args = append(args, "-vf", vf)
-	} else if !useDD && cfg.Resolution != "" {
+	} else if cfg.Resolution != "" {
 		scaled := strings.Replace(cfg.Resolution, "x", ":", 1)
 		args = append(args, "-vf", fmt.Sprintf("scale=%s", scaled))
 	}
@@ -90,7 +96,7 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 
 	args = append(args,
 		"-f", "hls",
-		"-hls_time", "1",
+		"-hls_time", "2",
 		"-hls_list_size", "3",
 		"-hls_flags", "append_list",
 		"-hls_segment_filename", filepath.Join(segmentDir, "segment_%d.ts"),

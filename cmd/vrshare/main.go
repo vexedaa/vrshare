@@ -65,11 +65,6 @@ func main() {
 		log.Println("Using gdigrab for capture (ddagrab not available)")
 	}
 
-	// Warn if resolution scaling is set with GPU encoder + ddagrab
-	if useDDAgrab && cfg.Resolution != "" && resolvedEncoder != "cpu" {
-		log.Printf("Warning: --resolution is ignored with GPU encoder + ddagrab. Use native resolution or --encoder cpu.")
-	}
-
 	if cfg.Audio {
 		log.Println("Audio capture enabled (WASAPI loopback, excluding VRChat)")
 	}
