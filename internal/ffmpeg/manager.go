@@ -72,7 +72,7 @@ func (m *Manager) EnsureSegmentDir() error {
 }
 
 // Run starts FFmpeg with the given args. If audioPipe is non-nil, it is
-// attached as fd 3 (ExtraFiles) so FFmpeg can read raw PCM audio from pipe:3.
+// attached as stdin so FFmpeg can read raw PCM audio from pipe:0.
 func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) error {
 	if err := m.EnsureSegmentDir(); err != nil {
 		return fmt.Errorf("creating segment dir: %w", err)
@@ -89,7 +89,7 @@ func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) er
 		m.cmd.Stdout = os.Stdout
 		m.cmd.Stderr = os.Stderr
 		if audioPipe != nil {
-			m.cmd.ExtraFiles = []*os.File{audioPipe} // fd 3
+			m.cmd.Stdin = audioPipe
 		}
 
 		log.Printf("Starting FFmpeg: %s %v", m.FFmpegPath, args)

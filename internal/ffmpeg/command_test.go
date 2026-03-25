@@ -145,7 +145,7 @@ func TestBuildArgs_AudioEnabled(t *testing.T) {
 	assertContains(t, args, "-f", "s16le")
 	assertContains(t, args, "-ar", "48000")
 	assertContains(t, args, "-ac", "2")
-	assertContains(t, args, "-i", "pipe:3")
+	assertContains(t, args, "-i", "pipe:0")
 	assertContains(t, args, "-c:a", "aac")
 	assertContains(t, args, "-b:a", "128k")
 	assertNotContains(t, args, "dshow")
@@ -157,7 +157,7 @@ func TestBuildArgs_AudioDisabled(t *testing.T) {
 	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
 
 	assertNotContains(t, args, "s16le")
-	assertNotContains(t, args, "pipe:3")
+	assertNotContains(t, args, "pipe:0")
 	assertNotContains(t, args, "-c:a")
 }
 

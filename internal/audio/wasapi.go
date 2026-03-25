@@ -9,9 +9,12 @@ import (
 // DLL and proc references
 var (
 	modole32                        = syscall.NewLazyDLL("ole32.dll")
-	modmmdevapi                     = syscall.NewLazyDLL("mmdevapi.dll")
+	modcombase                      = syscall.NewLazyDLL("combase.dll")
+	modmmdevapi                     = syscall.NewLazyDLL("MMDevAPI.dll")
 	procCoInitializeEx              = modole32.NewProc("CoInitializeEx")
 	procCoUninitialize              = modole32.NewProc("CoUninitialize")
+	procRoInitialize                = modcombase.NewProc("RoInitialize")
+	procRoUninitialize              = modcombase.NewProc("RoUninitialize")
 	procActivateAudioInterfaceAsync = modmmdevapi.NewProc("ActivateAudioInterfaceAsync")
 )
 

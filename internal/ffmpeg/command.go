@@ -50,9 +50,9 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 		}
 	}
 
-	// Audio input (raw PCM from WASAPI capturer via pipe)
+	// Audio input (raw PCM from WASAPI capturer via stdin)
 	if cfg.Audio {
-		args = append(args, "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:3")
+		args = append(args, "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0")
 	}
 
 	switch resolvedEncoder {
