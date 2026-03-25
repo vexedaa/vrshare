@@ -22,3 +22,5 @@ frontend/dist/
 
 # Git worktrees
 .worktrees/
+vrshare.exe~
+*~
