@@ -13,6 +13,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -40,12 +42,17 @@ jobs:
         run: go build -tags desktop,production -ldflags "-s -w" -o vrshare.exe ./cmd/vrshare/
 
       - name: Create release zip
-        run: Compress-Archive -Path vrshare.exe, README.md, LICENSE -DestinationPath vrshare-windows-x64.zip
+        run: |
+          New-Item -ItemType Directory -Path release -Force
+          Copy-Item vrshare.exe release/
+          Copy-Item README.md release/
+          Copy-Item LICENSE release/
+          Copy-Item -Recurse bundle/ffmpeg release/ffmpeg
+          Compress-Archive -Path release/* -DestinationPath vrshare-windows-x64.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             vrshare-windows-x64.zip
-            vrshare.exe
           generate_release_notes: true

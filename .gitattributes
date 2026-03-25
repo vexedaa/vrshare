@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+bundle/ffmpeg/*.exe filter=lfs diff=lfs merge=lfs -text
+bundle/ffmpeg/*.dll filter=lfs diff=lfs merge=lfs -text

@@ -32,13 +32,23 @@ func NewManager(ffmpegPath, segmentDir string) *Manager {
 	}
 }
 
-// FindFFmpeg looks for ffmpeg in the cache directory first (where custom
-// builds with ddagrab support may live), then falls back to PATH.
+// FindFFmpeg looks for ffmpeg in these locations (in order):
+//  1. ~/.vrshare/ffmpeg/ (user's custom builds)
+//  2. ./ffmpeg/ (bundled with release zip)
+//  3. System PATH
 func FindFFmpeg() (string, error) {
-	// Check cache dir first (custom builds)
+	// Check user cache dir first (custom builds)
 	cacheDir := defaultCacheDir()
 	if path, err := findFFmpegInDir(cacheDir); err == nil {
 		return path, nil
+	}
+
+	// Check alongside the executable (bundled release)
+	if exePath, err := os.Executable(); err == nil {
+		bundleDir := filepath.Join(filepath.Dir(exePath), "ffmpeg")
+		if path, err := findFFmpegInDir(bundleDir); err == nil {
+			return path, nil
+		}
 	}
 
 	// Fall back to PATH
@@ -47,7 +57,7 @@ func FindFFmpeg() (string, error) {
 		return path, nil
 	}
 
-	return "", fmt.Errorf("ffmpeg not found in %s or on PATH", cacheDir)
+	return "", fmt.Errorf("ffmpeg not found in %s, ./ffmpeg/, or on PATH", cacheDir)
 }
 
 func findFFmpegInDir(dir string) (string, error) {
