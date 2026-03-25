@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,7 +27,7 @@ video{max-width:100%;max-height:100vh}
 <script>
 var video=document.getElementById("v");
 if(Hls.isSupported()){
-  var hls=new Hls({liveSyncDurationCount:2,liveMaxLatencyDurationCount:4});
+  var hls=new Hls({liveSyncDurationCount:3,liveMaxLatencyDurationCount:6});
   hls.loadSource("/stream.m3u8");
   hls.attachMedia(video);
   hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play()});
@@ -37,12 +38,40 @@ if(Hls.isSupported()){
 </body>
 </html>`
 
+// Server serves HLS segments and tracks active downloads.
 type Server struct {
-	dir string
+	dir     string
+	active  map[string]int // segment name -> active reader count
+	activeMu sync.Mutex
 }
 
 func NewServer(dir string) *Server {
-	return &Server{dir: dir}
+	return &Server{
+		dir:    dir,
+		active: make(map[string]int),
+	}
+}
+
+// IsSegmentActive returns true if any viewer is currently downloading the segment.
+func (s *Server) IsSegmentActive(name string) bool {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	return s.active[name] > 0
+}
+
+func (s *Server) trackStart(name string) {
+	s.activeMu.Lock()
+	s.active[name]++
+	s.activeMu.Unlock()
+}
+
+func (s *Server) trackEnd(name string) {
+	s.activeMu.Lock()
+	s.active[name]--
+	if s.active[name] <= 0 {
+		delete(s.active, name)
+	}
+	s.activeMu.Unlock()
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +140,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case ".ts":
 		w.Header().Set("Content-Type", "video/mp2t")
 		w.Header().Set("Cache-Control", "max-age=3600")
+		// Track active segment downloads
+		s.trackStart(name)
+		defer s.trackEnd(name)
 	}
 
 	http.ServeContent(w, r, "", time.Time{}, f)

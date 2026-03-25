@@ -139,7 +139,7 @@ func main() {
 	fmt.Println()
 
 	// Start segment janitor
-	go hls.RunJanitor(ctx, segmentDir, 5*time.Second)
+	go hls.RunJanitor(ctx, segmentDir, hlsServer, 5*time.Second)
 
 	// Start audio capturer if enabled
 	var audioPipeR *os.File

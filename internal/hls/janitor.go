@@ -10,7 +10,9 @@ import (
 	"time"
 )
 
-func CleanOldSegments(dir string) (int, error) {
+// CleanOldSegments removes .ts files that are not in the playlist and not
+// actively being downloaded by any viewer.
+func CleanOldSegments(dir string, srv *Server) (int, error) {
 	playlistPath := filepath.Join(dir, "stream.m3u8")
 
 	referenced, err := parsePlaylistSegments(playlistPath)
@@ -35,10 +37,14 @@ func CleanOldSegments(dir string) (int, error) {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".ts" {
 			continue
 		}
-		if !referenced[entry.Name()] {
-			if err := os.Remove(filepath.Join(dir, entry.Name())); err == nil {
-				removed++
-			}
+		if referenced[entry.Name()] {
+			continue
+		}
+		if srv != nil && srv.IsSegmentActive(entry.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err == nil {
+			removed++
 		}
 	}
 
@@ -63,7 +69,8 @@ func parsePlaylistSegments(path string) (map[string]bool, error) {
 	return segments, scanner.Err()
 }
 
-func RunJanitor(ctx context.Context, dir string, interval time.Duration) {
+// RunJanitor periodically cleans old segments until the context is cancelled.
+func RunJanitor(ctx context.Context, dir string, srv *Server, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -72,7 +79,7 @@ func RunJanitor(ctx context.Context, dir string, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			removed, err := CleanOldSegments(dir)
+			removed, err := CleanOldSegments(dir, srv)
 			if err != nil {
 				log.Printf("janitor error: %v", err)
 			} else if removed > 0 {

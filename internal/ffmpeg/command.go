@@ -96,8 +96,8 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 
 	args = append(args,
 		"-f", "hls",
-		"-hls_time", "2",
-		"-hls_list_size", "3",
+		"-hls_time", "4",
+		"-hls_list_size", "5",
 		"-hls_flags", "append_list",
 		"-hls_segment_filename", filepath.Join(segmentDir, "segment_%d.ts"),
 		filepath.Join(segmentDir, "stream.m3u8"),

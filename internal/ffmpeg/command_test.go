@@ -18,8 +18,8 @@ func TestBuildArgs_Defaults(t *testing.T) {
 	assertContains(t, args, "-b:v", "4000k")
 	assertContains(t, args, "-g", "30")
 	assertContains(t, args, "-f", "hls")
-	assertContains(t, args, "-hls_time", "2")
-	assertContains(t, args, "-hls_list_size", "3")
+	assertContains(t, args, "-hls_time", "4")
+	assertContains(t, args, "-hls_list_size", "5")
 	assertNotContains(t, args, "-vf")
 }
 
