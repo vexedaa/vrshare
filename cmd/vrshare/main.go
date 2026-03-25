@@ -15,6 +15,13 @@ import (
 )
 
 func main() {
+	// Mode detection: no args + no console = GUI mode
+	if len(os.Args) == 1 && !hasConsole() {
+		launchGUI()
+		return
+	}
+
+	// CLI mode
 	cfg := config.Default()
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
