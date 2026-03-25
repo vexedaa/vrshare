@@ -3,13 +3,13 @@ package hls
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -45,18 +45,20 @@ if(Hls.isSupported()){
 // Server serves HLS segments, tracks active downloads, and provides
 // a fragmented MP4 endpoint for players that don't support HLS.
 type Server struct {
-	dir         string
-	port        int
-	ffmpegPath  string
-	active      map[string]int // segment name -> active reader count
-	activeMu    sync.Mutex
-	viewerCount int32 // atomic: approximate viewer count
+	dir        string
+	port       int
+	ffmpegPath string
+	active     map[string]int    // segment name -> active reader count
+	activeMu   sync.Mutex
+	viewers    map[string]time.Time // IP -> last seen time
+	viewersMu  sync.Mutex
 }
 
 func NewServer(dir string) *Server {
 	return &Server{
-		dir:    dir,
-		active: make(map[string]int),
+		dir:     dir,
+		active:  make(map[string]int),
+		viewers: make(map[string]time.Time),
 	}
 }
 
@@ -89,9 +91,31 @@ func (s *Server) trackEnd(name string) {
 	s.activeMu.Unlock()
 }
 
-// ViewerCount returns the approximate number of active viewers.
+// ViewerCount returns the number of unique viewers seen in the last 5 seconds.
 func (s *Server) ViewerCount() int {
-	return int(atomic.LoadInt32(&s.viewerCount))
+	s.viewersMu.Lock()
+	defer s.viewersMu.Unlock()
+	cutoff := time.Now().Add(-5 * time.Second)
+	count := 0
+	for ip, lastSeen := range s.viewers {
+		if lastSeen.After(cutoff) {
+			count++
+		} else {
+			delete(s.viewers, ip)
+		}
+	}
+	return count
+}
+
+func (s *Server) trackViewer(r *http.Request) {
+	ip := r.RemoteAddr
+	// Strip port
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	s.viewersMu.Lock()
+	s.viewers[ip] = time.Now()
+	s.viewersMu.Unlock()
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -163,11 +187,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case ".m3u8":
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-cache")
-		atomic.AddInt32(&s.viewerCount, 1)
-		go func() {
-			time.Sleep(3 * time.Second)
-			atomic.AddInt32(&s.viewerCount, -1)
-		}()
+		s.trackViewer(r)
 	case ".ts":
 		w.Header().Set("Content-Type", "video/mp2t")
 		w.Header().Set("Cache-Control", "max-age=3600")

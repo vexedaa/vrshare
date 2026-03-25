@@ -11,18 +11,9 @@ import (
 )
 
 var (
-	user32                  = syscall.NewLazyDLL("user32.dll")
-	procEnumDisplayMonitors = user32.NewProc("EnumDisplayMonitorsW")
-	procGetMonitorInfo      = user32.NewProc("GetMonitorInfoW")
+	user32               = syscall.NewLazyDLL("user32.dll")
+	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 )
-
-type monitorInfoEx struct {
-	cbSize    uint32
-	rcMonitor struct{ left, top, right, bottom int32 }
-	rcWork    struct{ left, top, right, bottom int32 }
-	dwFlags   uint32
-	szDevice  [32]uint16
-}
 
 func detectPlatformDevices() ([]server.MonitorInfo, []server.AudioDevice) {
 	monitors := detectMonitors()
@@ -33,28 +24,36 @@ func detectPlatformDevices() ([]server.MonitorInfo, []server.AudioDevice) {
 }
 
 func detectMonitors() []server.MonitorInfo {
+	// Use GetSystemMetrics instead of EnumDisplayMonitors to avoid
+	// callback-based API that deadlocks when called from a Wails goroutine.
+	const SM_CMONITORS = 80
+	const SM_CXSCREEN = 0
+	const SM_CYSCREEN = 1
+
+	count, _, _ := procGetSystemMetrics.Call(SM_CMONITORS)
+	if count == 0 {
+		count = 1
+	}
+
+	w, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
+	h, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
+
 	var monitors []server.MonitorInfo
-	idx := 0
-
-	callback := syscall.NewCallback(func(hMonitor uintptr, hdc uintptr, lprcClip uintptr, dwData uintptr) uintptr {
-		var mi monitorInfoEx
-		mi.cbSize = uint32(unsafe.Sizeof(mi))
-		procGetMonitorInfo.Call(hMonitor, uintptr(unsafe.Pointer(&mi)))
-
-		w := mi.rcMonitor.right - mi.rcMonitor.left
-		h := mi.rcMonitor.bottom - mi.rcMonitor.top
-		isPrimary := mi.dwFlags&1 != 0
-
+	for i := 0; i < int(count); i++ {
+		res := fmt.Sprintf("%dx%d", w, h)
+		if i > 0 {
+			res = "unknown" // GetSystemMetrics only returns primary dimensions
+		}
 		monitors = append(monitors, server.MonitorInfo{
-			Index:      idx,
-			Name:       fmt.Sprintf("Monitor %d", idx),
-			Resolution: fmt.Sprintf("%dx%d", w, h),
-			IsPrimary:  isPrimary,
+			Index:      i,
+			Name:       fmt.Sprintf("Monitor %d", i),
+			Resolution: res,
+			IsPrimary:  i == 0,
 		})
-		idx++
-		return 1
-	})
+	}
 
-	procEnumDisplayMonitors.Call(0, 0, callback, 0)
 	return monitors
 }
+
+// Keep unsafe import used
+var _ = unsafe.Pointer(nil)

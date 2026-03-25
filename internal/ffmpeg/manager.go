@@ -89,17 +89,43 @@ func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) er
 
 		m.cmd = exec.CommandContext(ctx, m.FFmpegPath, args...)
 		m.cmd.Stdout = os.Stdout
-		if m.StderrWriter != nil {
-			m.cmd.Stderr = m.StderrWriter
-		} else {
-			m.cmd.Stderr = os.Stderr
-		}
 		if audioPipe != nil {
 			m.cmd.Stdin = audioPipe
 		}
 
+		// Use StderrPipe for unbuffered reads of FFmpeg progress output.
+		// FFmpeg writes progress with \r (no newline), which gets stuck
+		// in Go's internal pipe buffer when using cmd.Stderr = io.Writer.
+		stderrPipe, pipeErr := m.cmd.StderrPipe()
+		if pipeErr != nil {
+			m.cmd.Stderr = os.Stderr
+		}
+
 		log.Printf("Starting FFmpeg: %s %v", m.FFmpegPath, args)
-		err := m.cmd.Run()
+		startErr := m.cmd.Start()
+		if startErr != nil {
+			return fmt.Errorf("starting FFmpeg: %w", startErr)
+		}
+
+		// Copy stderr in a goroutine for real-time stats parsing
+		if pipeErr == nil {
+			go func() {
+				buf := make([]byte, 4096)
+				for {
+					n, readErr := stderrPipe.Read(buf)
+					if n > 0 {
+						if m.StderrWriter != nil {
+							m.StderrWriter.Write(buf[:n])
+						}
+					}
+					if readErr != nil {
+						return
+					}
+				}
+			}()
+		}
+
+		err := m.cmd.Wait()
 
 		if ctx.Err() != nil {
 			return ctx.Err()

@@ -2,6 +2,9 @@ package gui
 
 import (
 	"context"
+	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -19,8 +22,17 @@ type App struct {
 	done    chan struct{}
 }
 
-// NewApp creates a new App instance.
+// NewApp creates a new App instance and sets up debug logging.
 func NewApp() *App {
+	// Log to file since GUI mode has no console
+	home, _ := os.UserHomeDir()
+	logPath := filepath.Join(home, ".vrshare", "debug.log")
+	os.MkdirAll(filepath.Dir(logPath), 0755)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err == nil {
+		log.SetOutput(f)
+	}
+	log.Println("[app] NewApp created, logging to", logPath)
 	return &App{}
 }
 
