@@ -37,7 +37,7 @@ jobs:
         run: go-winres make --in winres/winres.json --arch amd64 --out cmd/vrshare/rsrc
 
       - name: Build
-        run: go build -tags desktop,production -ldflags "-H windowsgui -s -w" -o vrshare.exe ./cmd/vrshare/
+        run: go build -tags desktop,production -ldflags "-s -w" -o vrshare.exe ./cmd/vrshare/
 
       - name: Create release zip
         run: Compress-Archive -Path vrshare.exe, README.md, LICENSE -DestinationPath vrshare-windows-x64.zip

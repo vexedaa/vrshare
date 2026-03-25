@@ -4,7 +4,7 @@ package main
 
 import (
 	"log"
-	"os"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -16,56 +16,102 @@ import (
 	"github.com/vexedaa/vrshare/internal/gui"
 )
 
-const ATTACH_PARENT_PROCESS = ^uintptr(0) // (DWORD)-1
-
 var (
-	kernel32           = syscall.NewLazyDLL("kernel32.dll")
-	procAttachConsole  = kernel32.NewProc("AttachConsole")
-	procGetStdHandle   = kernel32.NewProc("GetStdHandle")
-	procSetStdHandle   = kernel32.NewProc("SetStdHandle")
+	kernel32              = syscall.NewLazyDLL("kernel32.dll")
+	procGetConsoleWindow  = kernel32.NewProc("GetConsoleWindow")
+	procFreeConsole       = kernel32.NewProc("FreeConsole")
+	procCreateToolhelp32  = kernel32.NewProc("CreateToolhelp32Snapshot")
+	procProcess32First    = kernel32.NewProc("Process32FirstW")
+	procProcess32Next     = kernel32.NewProc("Process32NextW")
+	procGetCurrentProcessId = kernel32.NewProc("GetCurrentProcessId")
+
+	user32win             = syscall.NewLazyDLL("user32.dll")
+	procShowWindow        = user32win.NewProc("ShowWindow")
 )
 
-// hasConsole tries to attach to the parent process's console.
-// Returns true if launched from a terminal (cmd, powershell, etc.).
-// Returns false if double-clicked from Explorer (no parent console).
-// Must be built with -ldflags "-H windowsgui" for this to work correctly.
-func hasConsole() bool {
-	r, _, _ := procAttachConsole.Call(uintptr(ATTACH_PARENT_PROCESS))
-	if r == 0 {
-		return false
-	}
-	// Reopen stdout/stderr to the attached console
-	reattachStdio()
-	return true
+type processEntry32 struct {
+	dwSize              uint32
+	cntUsage            uint32
+	th32ProcessID       uint32
+	th32DefaultHeapID   uintptr
+	th32ModuleID        uint32
+	cntThreads          uint32
+	th32ParentProcessID uint32
+	pcPriClassBase      int32
+	dwFlags             uint32
+	szExeFile           [260]uint16
 }
 
-// reattachStdio reconnects os.Stdout and os.Stderr to the console
-// after AttachConsole, since GUI subsystem apps don't have them by default.
-func reattachStdio() {
-	const STD_OUTPUT_HANDLE = uintptr(^uint32(11 - 1)) // -11
-	const STD_ERROR_HANDLE = uintptr(^uint32(12 - 1))  // -12
-
-	stdout, _, _ := procGetStdHandle.Call(STD_OUTPUT_HANDLE)
-	stderr, _, _ := procGetStdHandle.Call(STD_ERROR_HANDLE)
-
-	if stdout != 0 && stdout != ^uintptr(0) {
-		os.Stdout = os.NewFile(stdout, "stdout")
+// hasConsole returns true if launched from a terminal (cmd, powershell, bash, etc.)
+// Returns false if launched from Explorer or other GUI shells (double-click).
+func hasConsole() bool {
+	parentName := strings.ToLower(getParentProcessName())
+	terminals := []string{"cmd.exe", "powershell.exe", "pwsh.exe", "bash.exe",
+		"wsl.exe", "windowsterminal.exe", "conhost.exe", "mintty.exe",
+		"alacritty.exe", "wezterm-gui.exe", "hyper.exe"}
+	for _, t := range terminals {
+		if parentName == t {
+			return true
+		}
 	}
-	if stderr != 0 && stderr != ^uintptr(0) {
-		os.Stderr = os.NewFile(stderr, "stderr")
+	return false
+}
+
+func getParentProcessName() string {
+	const TH32CS_SNAPPROCESS = 0x00000002
+
+	pid, _, _ := procGetCurrentProcessId.Call()
+
+	snap, _, _ := procCreateToolhelp32.Call(TH32CS_SNAPPROCESS, 0)
+	if snap == ^uintptr(0) {
+		return ""
+	}
+	defer syscall.CloseHandle(syscall.Handle(snap))
+
+	var entry processEntry32
+	entry.dwSize = uint32(unsafe.Sizeof(entry))
+
+	// Find our process to get parent PID
+	var parentPID uint32
+	ok, _, _ := procProcess32First.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	for ok != 0 {
+		if entry.th32ProcessID == uint32(pid) {
+			parentPID = entry.th32ParentProcessID
+			break
+		}
+		entry.dwSize = uint32(unsafe.Sizeof(entry))
+		ok, _, _ = procProcess32Next.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	}
+	if parentPID == 0 {
+		return ""
 	}
 
-	// Redirect log output to the new stderr
-	log.SetOutput(os.Stderr)
+	// Find parent process name
+	entry.dwSize = uint32(unsafe.Sizeof(entry))
+	ok, _, _ = procProcess32First.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	for ok != 0 {
+		if entry.th32ProcessID == parentPID {
+			return syscall.UTF16ToString(entry.szExeFile[:])
+		}
+		entry.dwSize = uint32(unsafe.Sizeof(entry))
+		ok, _, _ = procProcess32Next.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	}
+	return ""
+}
 
-	// Also set the CRT file descriptors via SetStdHandle
-	procSetStdHandle.Call(STD_OUTPUT_HANDLE, stdout)
-	procSetStdHandle.Call(STD_ERROR_HANDLE, stderr)
-
-	_ = unsafe.Pointer(nil) // keep unsafe import
+// hideAndDetachConsole hides the console window and detaches from it.
+func hideAndDetachConsole() {
+	hwnd, _, _ := procGetConsoleWindow.Call()
+	if hwnd != 0 {
+		const SW_HIDE = 0
+		procShowWindow.Call(hwnd, SW_HIDE)
+	}
+	procFreeConsole.Call()
 }
 
 func launchGUI() {
+	hideAndDetachConsole()
+
 	app := gui.NewApp()
 
 	err := wails.Run(&options.App{
