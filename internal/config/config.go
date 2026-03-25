@@ -17,22 +17,25 @@ const (
 )
 
 type Config struct {
-	Port    int
-	Monitor int
-	FPS        int
-	Resolution string // "WxH" or "" for native
-	Bitrate    int    // kbps
-	Encoder    EncoderType
-	Audio      bool
+	Port        int         `json:"port"`
+	Monitor     int         `json:"monitor"`
+	FPS         int         `json:"fps"`
+	Resolution  string      `json:"resolution"`
+	Bitrate     int         `json:"bitrate"`
+	Encoder     EncoderType `json:"encoder"`
+	Audio       bool        `json:"audio"`
+	AudioDevice string      `json:"audioDevice"`
+	Tunnel      string      `json:"tunnel"`
 }
 
 func Default() Config {
 	return Config{
 		Port:    8080,
-		Monitor: 0,
 		FPS:     30,
 		Bitrate: 4000,
 		Encoder: EncoderAuto,
+		Audio:   false,
+		Tunnel:  "",
 	}
 }
 
@@ -58,6 +61,9 @@ func (c Config) Validate() error {
 	case EncoderAuto, EncoderNVENC, EncoderQSV, EncoderAMF, EncoderCPU:
 	default:
 		return fmt.Errorf("encoder must be one of: auto, nvenc, qsv, amf, cpu; got %q", c.Encoder)
+	}
+	if c.Tunnel != "" && c.Tunnel != "cloudflare" && c.Tunnel != "tailscale" {
+		return fmt.Errorf("tunnel must be empty, \"cloudflare\", or \"tailscale\"")
 	}
 	return nil
 }

@@ -128,6 +128,28 @@ func TestParseResolution(t *testing.T) {
 	}
 }
 
+func TestValidate_Tunnel(t *testing.T) {
+	tests := []struct {
+		tunnel  string
+		wantErr bool
+	}{
+		{"", false},
+		{"cloudflare", false},
+		{"tailscale", false},
+		{"ngrok", true},
+		{"invalid", true},
+		{"Cloudflare", true},
+	}
+	for _, tt := range tests {
+		cfg := Default()
+		cfg.Tunnel = tt.tunnel
+		err := cfg.Validate()
+		if (err != nil) != tt.wantErr {
+			t.Errorf("tunnel=%q: wantErr=%v, got %v", tt.tunnel, tt.wantErr, err)
+		}
+	}
+}
+
 func TestValidate_Resolution(t *testing.T) {
 	cfg := Default()
 	cfg.Resolution = "1920x1080"
