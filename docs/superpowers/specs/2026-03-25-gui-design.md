@@ -12,7 +12,7 @@ A single `vrshare` binary detects its launch context:
 
 - **CLI args present** → parse flags, start server headless, block until Ctrl+C (current behavior)
 - **No CLI args + no console** (double-clicked) → launch Wails GUI with system tray
-- **No CLI args + console** → print help/usage
+- **No CLI args + console** → start with defaults (preserves current CLI behavior)
 
 Console detection on Windows uses `GetConsoleWindow()` from the Windows API. GUI mode is Windows-only (matching existing platform constraints: WASAPI, ddagrab).
 
@@ -22,9 +22,9 @@ Console detection on Windows uses `GetConsoleWindow()` from the Windows API. GUI
 cmd/vrshare/
   main.go              — mode detection: CLI args → headless, no args → GUI
 internal/
-  config/config.go     — (existing, unchanged) config struct + validation
-  ffmpeg/              — (existing, unchanged) encoder detection, command building, process manager
-  hls/                 — (existing, unchanged) HTTP server, player, janitor
+  config/config.go     — (existing, extended) config struct + validation — add Tunnel and Audio fields
+  ffmpeg/              — (existing, minor changes) add stderr parsing hook for stats extraction
+  hls/                 — (existing, minor changes) add connection tracking for viewer count
   audio/               — (existing, unchanged) WASAPI capturer
   tunnel/              — (existing, unchanged) Cloudflare/Tailscale
   server/              — (new) orchestrator: wires together ffmpeg, hls, audio, tunnel
@@ -34,7 +34,7 @@ frontend/              — (new) Svelte + Tailwind CSS web frontend
 
 ### Design Constraints
 
-- All existing `internal/` packages remain untouched and Wails-free.
+- Existing `internal/` packages remain Wails-free. Minor, targeted changes are allowed (config extension, stats hooks) but no Wails imports.
 - `internal/server/` is the only new package that imports existing internal packages.
 - `internal/gui/` is the only package that imports Wails.
 - The CLI code path never imports Wails or `internal/gui/`.
@@ -65,13 +65,12 @@ type StreamState struct {
     Uptime        time.Duration
     StreamURL     string        // built from configured port + LAN IP
 
-    // Encoding stats (populated while streaming)
+    // Encoding stats (populated while streaming, parsed from FFmpeg stderr progress)
     FPS           float64
     Bitrate       int           // kbps
     DroppedFrames int
-    CPUUsage      float64
-    GPUUsage      float64
-    ViewerCount   int
+    Speed         float64       // encoding speed multiplier (1.0 = realtime)
+    ViewerCount   int           // approximate, from HLS playlist connection tracking
 }
 ```
 
@@ -79,7 +78,7 @@ type StreamState struct {
 
 - `Start()` performs what `main.go` does today: probe FFmpeg, detect encoder, create temp dir, start HLS server, start audio capturer (if enabled), start tunnel (if configured), launch FFmpeg process.
 - `Stop()` gracefully shuts down all components.
-- `State()` returns current stream state. Encoding stats are parsed from FFmpeg's stderr progress output. Viewer count is derived from active HTTP connections to the HLS playlist endpoint.
+- `State()` returns current stream state. Encoding stats (FPS, bitrate, dropped frames, speed) are parsed from FFmpeg's stderr progress output — requires adding a parsing `io.Writer` wrapper around the existing stderr pipe in `ffmpeg/manager.go`. Viewer count is derived from tracking connections to the HLS playlist endpoint — requires a lightweight counter middleware in `hls/server.go`.
 - Both CLI and GUI call the same `Server` instance.
 
 ## New Package: `internal/gui/`
@@ -103,7 +102,7 @@ func (a *App) LoadPreset(name string) (config.Config, error)
 func (a *App) DeletePreset(name string) error
 
 // System detection (for wizard)
-func (a *App) DetectSystem() SystemInfo  // available encoders, monitors, audio devices
+func (a *App) DetectSystem() SystemInfo
 
 // App settings
 func (a *App) GetSettings() AppSettings
@@ -135,6 +134,18 @@ No events emitted when idle.
 - Error: error icon (red tint or overlay)
 
 **Double-click tray icon** → show window.
+
+### SystemInfo
+
+```go
+type SystemInfo struct {
+    Encoders     []EncoderInfo    // name, type (nvenc/qsv/amf/cpu), GPU name if applicable
+    Monitors     []MonitorInfo    // index, name, resolution, refresh rate, is primary
+    AudioDevices []AudioDevice    // name, is default
+}
+```
+
+Populated by probing FFmpeg for encoder support and querying Windows display/audio APIs.
 
 ### Window Close Behavior
 
@@ -174,7 +185,7 @@ Main view after first run. Two states:
 
 **Streaming state:**
 - Top bar: green status dot, "Streaming" label, uptime counter, stream URL with copy button, "Stop" button
-- Stats row: FPS, bitrate, dropped frames, CPU usage, viewer count
+- Stats row: FPS, bitrate, dropped frames, speed, viewer count
 - Bottom split:
   - Left panel: active preset summary (name, key settings)
   - Right panel: scrolling event log (timestamped messages)
