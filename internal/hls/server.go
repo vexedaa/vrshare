@@ -184,6 +184,7 @@ func (s *Server) serveMP4(w http.ResponseWriter, r *http.Request) {
 		"-live_start_index", "-1",
 		"-i", hlsURL,
 		"-c", "copy",
+		"-bsf:a", "aac_adtstoasc",
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
 		"-reset_timestamps", "1",
 		"-f", "mp4",
