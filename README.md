@@ -2,126 +2,118 @@
 
 Stream your desktop directly into VRChat. No YouTube, no Twitch — just paste a URL into any VRChat video player and your screen is live.
 
-VRShare captures your desktop using DXGI Desktop Duplication (or GDI as fallback), encodes via hardware GPU encoder (NVENC/QSV/AMF), and serves an HLS stream over HTTP. Optional Cloudflare tunnel support gives you a public HTTPS URL without port forwarding.
+VRShare captures your desktop using GPU-accelerated screen capture, encodes with hardware video encoders, and serves an HLS stream that any VRChat video player can consume. A built-in GUI makes setup simple, and optional tunnel support gives you a public URL without port forwarding.
+
+## Download
+
+Download the latest `vrshare.exe` from [GitHub Releases](https://github.com/vexedaa/vrshare/releases). No installation needed — just download and run.
+
+### Requirements
+
+- **Windows 10/11** (x64)
+- **FFmpeg** — VRShare will prompt to download it on first run if not found
+- **WebView2 Runtime** — included with Windows 10/11 and Microsoft Edge
+
+### Optional
+
+- **[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)** — for Cloudflare tunnel support
+- **[Tailscale](https://tailscale.com/download)** — for Tailscale Funnel support
+
+## Getting Started
+
+1. **Double-click `vrshare.exe`** to open the GUI
+2. **First-run wizard** auto-detects your GPU encoder, monitors, and audio — confirm or adjust
+3. **Click "Start Stream"** on the dashboard
+4. **Copy the stream URL** and paste it into any VRChat video player
+
+That's it. Your desktop is now streaming.
 
 ## Features
 
+- **GUI with system tray** — configure, start, and stop from a graphical interface
 - **GPU-native capture** — DXGI Desktop Duplication via ddagrab (zero CPU copy)
-- **Hardware encoding** — NVENC, Quick Sync, AMF auto-detected (software fallback)
+- **Hardware encoding** — NVIDIA NVENC, Intel Quick Sync, AMD AMF (auto-detected, software fallback)
 - **HLS streaming** — compatible with all VRChat video players (ProTV, AVPro, etc.)
-- **Cloudflare tunnel** — public HTTPS URL with one flag, no port forwarding needed
-- **System audio** — optional WASAPI loopback capture
-- **Built-in test player** — verify your stream at `http://localhost:8080/`
-- **Single binary** — one Go executable, FFmpeg as the only dependency
+- **System audio** — WASAPI loopback capture with automatic VRChat exclusion
+- **Tunnel support** — Cloudflare or Tailscale for public HTTPS URLs without port forwarding
+- **Quick display switching** — switch monitors with one click while streaming
+- **Presets** — save and load named configurations
+- **CLI mode** — pass command-line flags for headless/scripted use
 
-## Quick Start
+## GUI Mode
 
-```bash
-# Build
-go build -o vrshare.exe ./cmd/vrshare
+Double-click `vrshare.exe` (or launch it without arguments from Explorer). The app opens with:
 
-# Start streaming (auto-detects GPU encoder)
-./vrshare.exe
+- **Dashboard** — start/stop stream, see stream URL, viewer count, and event log
+- **Settings** — configure video (encoder, monitor, resolution, FPS, bitrate), audio, network (port, tunnel), presets, and tunnel provider authorization
+- **System tray** — minimizes to tray when closed (configurable). Right-click for quick actions, double-click to restore.
+- **Display switcher** — numbered buttons on the dashboard to switch monitors without opening settings
 
-# Start with a public tunnel URL (copied to clipboard)
-./vrshare.exe --tunnel
+Settings changes while streaming automatically restart the capture without dropping the stream URL or tunnel connection.
 
-# Start with audio
-./vrshare.exe --tunnel --audio
-```
+## CLI Mode
 
-Paste the stream URL into any VRChat video player. Done.
-
-## Usage
+Launch from a terminal with flags to run headless (no GUI):
 
 ```
-vrshare [flags]
+vrshare.exe [flags]
 
 Flags:
-  --port int          HTTP server port (default 8080)
-  --tunnel            Enable Cloudflare tunnel for public access
-  --monitor int       Monitor index to capture, 0 = primary (default 0)
-  --fps int           Capture framerate (default 30)
-  --resolution string Output resolution, WxH (default: native)
-  --bitrate int       Video bitrate in kbps (default 4000)
-  --encoder string    Encoder: auto, nvenc, qsv, amf, cpu (default "auto")
-  --audio             Enable system audio capture
-  --audio-device string Audio device name (auto-detect if empty)
+  --port int            HTTP server port (default 8080)
+  --tunnel string       Tunnel provider: cloudflare, tailscale (default: disabled)
+  --monitor int         Monitor index to capture, 0 = primary (default 0)
+  --fps int             Capture framerate (default 30)
+  --resolution string   Output resolution, WxH (default: native)
+  --bitrate int         Video bitrate in kbps (default 4000)
+  --encoder string      Encoder: auto, nvenc, qsv, amf, cpu (default "auto")
+  --audio               Enable system audio capture
+  --audio-device string Specific audio device name
 ```
 
 ### Examples
 
 ```bash
-# 60fps at 8mbps with NVENC
-./vrshare.exe --fps 60 --bitrate 8000 --encoder nvenc
+# Start with defaults
+vrshare.exe
 
-# Capture second monitor
-./vrshare.exe --monitor 1
+# 60fps at 8mbps with Cloudflare tunnel and audio
+vrshare.exe --fps 60 --bitrate 8000 --tunnel cloudflare --audio
 
-# Stream with audio and public URL
-./vrshare.exe --tunnel --audio
+# Capture second monitor at 720p
+vrshare.exe --monitor 1 --resolution 1280x720
 
-# CPU encoding at 720p (if no GPU encoder available)
-./vrshare.exe --encoder cpu --resolution 1280x720
+# Use Tailscale Funnel
+vrshare.exe --tunnel tailscale --audio
 ```
 
-## Requirements
+The stream URL is printed to the terminal and copied to your clipboard.
 
-- **Go 1.22+** for building
-- **FFmpeg** with ddagrab support (recommended) or any FFmpeg build (gdigrab fallback)
-- **cloudflared** (optional, for `--tunnel` support)
+## Tunnel Setup
 
-### FFmpeg with ddagrab
+Tunnels give you a public HTTPS URL so viewers outside your local network can watch — no port forwarding needed.
 
-Pre-built FFmpeg binaries typically don't include ddagrab. For the best performance (zero-CPU-copy GPU pipeline), build FFmpeg from source with MSYS2:
+### Cloudflare (no account required)
 
-```bash
-# In MSYS2 UCRT64 terminal
-pacman -S --needed base-devel mingw-w64-ucrt-x86_64-toolchain \
-  mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-yasm git \
-  mingw-w64-ucrt-x86_64-libx264 mingw-w64-ucrt-x86_64-ffnvcodec-headers \
-  mingw-w64-ucrt-x86_64-amf-headers
+1. Install `cloudflared`: `choco install cloudflared` or [download here](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+2. Select "Cloudflare" as tunnel provider in Settings (or use `--tunnel cloudflare`)
+3. A temporary public URL is generated automatically
 
-git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git && cd ffmpeg
+### Tailscale Funnel
 
-./configure --enable-gpl --enable-nonfree --enable-libx264 \
-  --enable-d3d11va --enable-dxva2 --enable-nvenc --enable-amf \
-  --prefix=$HOME/ffmpeg-build
+1. Install [Tailscale](https://tailscale.com/download) and sign in
+2. In VRShare Settings > Tunnel Providers, click "Sign In" for Tailscale if needed
+3. Select "Tailscale" as tunnel provider in Settings (or use `--tunnel tailscale`)
+4. Your stable Tailscale Funnel URL is used automatically
 
-make -j$(nproc) && make install
-```
+## FFmpeg
 
-Copy the built `ffmpeg.exe` and its DLLs to `~/.vrshare/ffmpeg/`:
+VRShare requires FFmpeg for screen capture and encoding. On first run, it will offer to download a compatible build automatically.
 
-```bash
-cp ~/ffmpeg-build/bin/ffmpeg.exe ~/.vrshare/ffmpeg/
-# Copy required DLLs from /ucrt64/bin/:
-# libbz2-1.dll, libgcc_s_seh-1.dll, libwinpthread-1.dll,
-# libiconv-2.dll, liblzma-5.dll, libstdc++-6.dll, libx264-*.dll, zlib1.dll
-```
+### Custom FFmpeg builds
 
-VRShare checks `~/.vrshare/ffmpeg/` before PATH, so your custom build is automatically preferred.
+For the best performance, use an FFmpeg build with **ddagrab** support (DXGI Desktop Duplication — GPU-native capture with zero CPU copy). Place your custom `ffmpeg.exe` in `~/.vrshare/ffmpeg/` and it will be used automatically.
 
-**Without ddagrab:** VRShare falls back to gdigrab (GDI capture), which works but uses significantly more CPU — especially at high resolutions or multi-monitor setups.
-
-### Audio Setup
-
-`--audio` captures system audio output via WASAPI loopback. It auto-detects common loopback devices (Stereo Mix, CABLE Output, etc.).
-
-If no device is found:
-1. **Enable Stereo Mix:** Sound Settings > Recording > right-click > Show Disabled Devices > enable "Stereo Mix"
-2. **Or install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/)** and set CABLE Output as default playback
-3. **Or specify manually:** `--audio-device "Your Device Name"`
-
-### Cloudflare Tunnel
-
-Install `cloudflared`:
-```bash
-choco install cloudflared
-# or download from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
-```
-
-Run with `--tunnel` and the public stream URL is automatically copied to your clipboard.
+Without ddagrab, VRShare falls back to gdigrab (GDI capture), which works but uses more CPU.
 
 ## How It Works
 
@@ -132,19 +124,53 @@ Desktop Screen
 ddagrab (DXGI Desktop Duplication) -- GPU capture, zero CPU copy
     |
     v
-h264_nvenc (NVIDIA GPU encoder) -- or QSV/AMF/libx264
+h264_nvenc (GPU encoder) -- or QSV/AMF/libx264
     |
     v
-HLS segments (.ts) + playlist (.m3u8) -- 1-second segments, 3-segment window
+HLS segments (.ts) + playlist (.m3u8) -- 1-second segments
     |
     v
-Go HTTP server -- CORS headers, cache control, test player at /
+Go HTTP server -- CORS, caching, built-in test player at /
     |
-    +---> LAN: http://192.168.x.x:8080/stream.m3u8
-    +---> Tunnel: https://random.trycloudflare.com/stream.m3u8
+    +--> LAN: http://192.168.x.x:8080/stream.m3u8
+    +--> Tunnel: https://your-url.trycloudflare.com/stream.m3u8
     |
     v
 VRChat Video Player (ProTV, AVPro, etc.)
+```
+
+## Building from Source
+
+Requires Go 1.24+, Node.js 18+, and npm.
+
+```powershell
+# Clone
+git clone https://github.com/vexedaa/vrshare.git
+cd vrshare
+
+# Build (GUI + CLI)
+.\build.ps1
+```
+
+This produces `vrshare.exe` with the embedded GUI frontend and Windows icon.
+
+For CLI-only builds (no Wails/GUI):
+
+```bash
+go build -o vrshare.exe ./cmd/vrshare/
+```
+
+## Data Location
+
+VRShare stores configuration in `~/.vrshare/`:
+
+```
+~/.vrshare/
+  config.json      -- current settings
+  settings.json    -- app preferences (close behavior, first-run flag)
+  presets/          -- saved presets
+  ffmpeg/           -- FFmpeg binary (auto-downloaded or custom)
+  debug.log         -- GUI debug log
 ```
 
 ## License
