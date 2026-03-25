@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vexedaa/vrshare/internal/audio"
 	"github.com/vexedaa/vrshare/internal/config"
 	"github.com/vexedaa/vrshare/internal/ffmpeg"
 	"github.com/vexedaa/vrshare/internal/hls"
@@ -29,8 +30,7 @@ func main() {
 	flag.StringVar(&cfg.Resolution, "resolution", cfg.Resolution, "Output resolution (WxH, empty for native)")
 	flag.IntVar(&cfg.Bitrate, "bitrate", cfg.Bitrate, "Video bitrate in kbps")
 	encoder := flag.String("encoder", string(cfg.Encoder), "Encoder: auto, nvenc, qsv, amf, cpu")
-	flag.BoolVar(&cfg.Audio, "audio", cfg.Audio, "Enable system audio capture")
-	flag.StringVar(&cfg.AudioDevice, "audio-device", cfg.AudioDevice, "Audio device name (auto-detect if empty)")
+	flag.BoolVar(&cfg.Audio, "audio", cfg.Audio, "Enable system audio capture (excludes VRChat)")
 	flag.Parse()
 
 	cfg.Encoder = config.EncoderType(*encoder)
@@ -70,18 +70,8 @@ func main() {
 		log.Printf("Warning: --resolution is ignored with GPU encoder + ddagrab. Use native resolution or --encoder cpu.")
 	}
 
-	// Detect audio device if --audio is enabled
-	if cfg.Audio && cfg.AudioDevice == "" {
-		cfg.AudioDevice = ffmpeg.DetectAudioDevice(ffmpegPath)
-		if cfg.AudioDevice != "" {
-			log.Printf("Detected audio device: %s", cfg.AudioDevice)
-		} else {
-			log.Println("Warning: --audio enabled but no loopback device found. Try --audio-device to specify manually.")
-			log.Println("  Enable 'Stereo Mix' in Sound Settings > Recording, or install VB-Audio Virtual Cable.")
-			cfg.Audio = false
-		}
-	} else if cfg.Audio {
-		log.Printf("Using audio device: %s", cfg.AudioDevice)
+	if cfg.Audio {
+		log.Println("Audio capture enabled (WASAPI loopback, excluding VRChat)")
 	}
 
 	// Create temp directory for segments
@@ -156,14 +146,34 @@ func main() {
 	// Start segment janitor
 	go hls.RunJanitor(ctx, segmentDir, 5*time.Second)
 
+	// Start audio capturer if enabled
+	var audioPipeR *os.File
+	var audioCapturer *audio.Capturer
+	if cfg.Audio {
+		pipeR, pipeW, pipeErr := os.Pipe()
+		if pipeErr != nil {
+			log.Printf("Warning: failed to create audio pipe: %v — continuing without audio", pipeErr)
+			cfg.Audio = false
+		} else {
+			audioPipeR = pipeR
+			audioCapturer = audio.NewCapturer(pipeW)
+			audioCapturer.Start(ctx)
+			defer pipeW.Close()
+			defer pipeR.Close()
+		}
+	}
+
 	// Build and run FFmpeg
 	manager := ffmpeg.NewManager(ffmpegPath, segmentDir)
 	args := ffmpeg.BuildArgs(cfg, resolvedEncoder, segmentDir, useDDAgrab)
 
-	err = manager.Run(ctx, args)
+	err = manager.Run(ctx, args, audioPipeR)
 
 	// Cleanup
 	log.Println("Cleaning up...")
+	if audioCapturer != nil {
+		audioCapturer.Stop()
+	}
 	if tun != nil {
 		tun.Stop()
 	}

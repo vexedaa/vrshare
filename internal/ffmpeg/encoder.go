@@ -45,36 +45,6 @@ func ProbeDDAgrab(ffmpegPath string) bool {
 	return strings.Contains(string(out), "ddagrab")
 }
 
-// DetectAudioDevice lists DirectShow audio devices and returns the first
-// loopback/stereo mix device found. Returns empty string if none found.
-func DetectAudioDevice(ffmpegPath string) string {
-	if runtime.GOOS != "windows" {
-		return ""
-	}
-	out, _ := exec.Command(ffmpegPath, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy").CombinedOutput()
-	output := string(out)
-
-	// Look for common loopback device names
-	loopbackNames := []string{"Stereo Mix", "CABLE Output", "What U Hear", "Loopback"}
-	for _, line := range strings.Split(output, "\n") {
-		for _, name := range loopbackNames {
-			if strings.Contains(line, name) {
-				// Extract the quoted device name from the line
-				start := strings.Index(line, "\"")
-				if start == -1 {
-					continue
-				}
-				end := strings.Index(line[start+1:], "\"")
-				if end == -1 {
-					continue
-				}
-				return line[start+1 : start+1+end]
-			}
-		}
-	}
-	return ""
-}
-
 // ProbeFFmpegEncoder runs ffmpeg -encoders once and returns a probe function
 // that checks the cached output for each encoder name.
 func ProbeFFmpegEncoder(ffmpegPath string) ProbeFunc {
