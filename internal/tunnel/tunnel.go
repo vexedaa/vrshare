@@ -174,5 +174,6 @@ func (t *Tunnel) MP4URL() string {
 func (t *Tunnel) Stop() {
 	if t.cmd != nil && t.cmd.Process != nil {
 		t.cmd.Process.Kill()
+		t.cmd.Wait() // reap the process to avoid zombies
 	}
 }

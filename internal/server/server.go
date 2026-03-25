@@ -35,6 +35,7 @@ type Server struct {
 
 	hlsSrv     *hls.Server
 	httpSrv    *http.Server
+	tun        *tunnel.Tunnel
 	stats      *StatsParser
 	ffmpegPath string
 	useDDAgrab bool
@@ -144,6 +145,7 @@ func (s *Server) Start(ctx context.Context) error {
 		if err != nil {
 			s.log("Tunnel warning: " + err.Error())
 		} else {
+			s.tun = tun
 			s.mu.Lock()
 			s.streamURL = tun.StreamURL()
 			s.mu.Unlock()
@@ -236,13 +238,18 @@ func (s *Server) Stop() error {
 
 	s.log("Stopping stream...")
 
-	// Cancel server context (stops FFmpeg, janitor, tunnel, audio)
+	// Cancel server context (stops FFmpeg, janitor, audio)
 	if s.srvCancel != nil {
 		s.srvCancel()
 	}
 	// Wait for FFmpeg to exit
 	if s.ffmpegDone != nil {
 		<-s.ffmpegDone
+	}
+	// Explicitly stop tunnel process (don't rely on context alone)
+	if s.tun != nil {
+		s.tun.Stop()
+		s.tun = nil
 	}
 	// Shut down HTTP server
 	if s.httpSrv != nil {
