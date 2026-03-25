@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,11 +45,12 @@ if(Hls.isSupported()){
 // Server serves HLS segments, tracks active downloads, and provides
 // a fragmented MP4 endpoint for players that don't support HLS.
 type Server struct {
-	dir        string
-	port       int
-	ffmpegPath string
-	active     map[string]int // segment name -> active reader count
-	activeMu   sync.Mutex
+	dir         string
+	port        int
+	ffmpegPath  string
+	active      map[string]int // segment name -> active reader count
+	activeMu    sync.Mutex
+	viewerCount int32 // atomic: approximate viewer count
 }
 
 func NewServer(dir string) *Server {
@@ -85,6 +87,11 @@ func (s *Server) trackEnd(name string) {
 		delete(s.active, name)
 	}
 	s.activeMu.Unlock()
+}
+
+// ViewerCount returns the approximate number of active viewers.
+func (s *Server) ViewerCount() int {
+	return int(atomic.LoadInt32(&s.viewerCount))
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +163,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case ".m3u8":
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-cache")
+		atomic.AddInt32(&s.viewerCount, 1)
+		go func() {
+			time.Sleep(3 * time.Second)
+			atomic.AddInt32(&s.viewerCount, -1)
+		}()
 	case ".ts":
 		w.Header().Set("Content-Type", "video/mp2t")
 		w.Header().Set("Cache-Control", "max-age=3600")

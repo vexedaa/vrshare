@@ -111,6 +111,24 @@ func TestServer_OnlyServesAllowedExtensions(t *testing.T) {
 	}
 }
 
+func TestServer_ViewerCount(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "stream.m3u8"), []byte("#EXTM3U\n"), 0644)
+	srv := NewServer(dir)
+
+	if srv.ViewerCount() != 0 {
+		t.Fatalf("initial viewer count should be 0, got %d", srv.ViewerCount())
+	}
+
+	req := httptest.NewRequest("GET", "/stream.m3u8", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if srv.ViewerCount() != 1 {
+		t.Fatalf("viewer count should be 1 after playlist request, got %d", srv.ViewerCount())
+	}
+}
+
 func TestServer_ServesPlayerPage(t *testing.T) {
 	dir := t.TempDir()
 
