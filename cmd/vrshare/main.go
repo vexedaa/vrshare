@@ -92,6 +92,7 @@ func main() {
 
 	// Start HLS server
 	hlsServer := hls.NewServer(segmentDir)
+	hlsServer.SetMP4Support(ffmpegPath, cfg.Port)
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: port %d already in use. Try --port <number>\n", cfg.Port)
@@ -107,14 +108,13 @@ func main() {
 	}()
 
 	// Print stream URLs
-	localURL := fmt.Sprintf("http://localhost:%d/stream.m3u8", cfg.Port)
 	lanIP := getOutboundIP()
-	lanURL := fmt.Sprintf("http://%s:%d/stream.m3u8", lanIP, cfg.Port)
 
 	fmt.Println()
 	fmt.Println("=== VRShare ===")
-	fmt.Printf("  Local:  %s\n", localURL)
-	fmt.Printf("  LAN:    %s\n", lanURL)
+	fmt.Printf("  HLS:    http://localhost:%d/stream.m3u8\n", cfg.Port)
+	fmt.Printf("  MP4:    http://localhost:%d/stream.mp4\n", cfg.Port)
+	fmt.Printf("  LAN:    http://%s:%d/stream.m3u8\n", lanIP, cfg.Port)
 
 	// Start tunnel if requested
 	var tun *tunnel.Tunnel
@@ -124,17 +124,19 @@ func main() {
 		if err != nil {
 			log.Printf("Warning: tunnel failed: %v (continuing without tunnel)", err)
 		} else {
-			streamURL := tun.StreamURL()
-			fmt.Printf("  Tunnel: %s\n", streamURL)
-			if clipErr := copyToClipboard(streamURL); clipErr == nil {
+			hlsURL := tun.StreamURL()
+			mp4URL := strings.TrimRight(tun.URL, "/") + "/stream.mp4"
+			fmt.Printf("  Tunnel: %s (HLS)\n", hlsURL)
+			fmt.Printf("          %s (MP4)\n", mp4URL)
+			if clipErr := copyToClipboard(mp4URL); clipErr == nil {
 				fmt.Println()
-				fmt.Println("Stream URL copied to clipboard!")
+				fmt.Println("MP4 stream URL copied to clipboard! (works with all video players)")
 			}
 		}
 	}
 
 	fmt.Println()
-	fmt.Println("Paste the URL above into any VRChat video player.")
+	fmt.Println("Use the MP4 URL for maximum compatibility with VRChat players.")
 	fmt.Println("Press Ctrl+C to stop.")
 	fmt.Println()
 

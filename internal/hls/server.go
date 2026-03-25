@@ -1,8 +1,11 @@
 package hls
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -38,11 +41,14 @@ if(Hls.isSupported()){
 </body>
 </html>`
 
-// Server serves HLS segments and tracks active downloads.
+// Server serves HLS segments, tracks active downloads, and provides
+// a fragmented MP4 endpoint for players that don't support HLS.
 type Server struct {
-	dir     string
-	active  map[string]int // segment name -> active reader count
-	activeMu sync.Mutex
+	dir        string
+	port       int
+	ffmpegPath string
+	active     map[string]int // segment name -> active reader count
+	activeMu   sync.Mutex
 }
 
 func NewServer(dir string) *Server {
@@ -50,6 +56,13 @@ func NewServer(dir string) *Server {
 		dir:    dir,
 		active: make(map[string]int),
 	}
+}
+
+// SetMP4Support configures the server to offer /stream.mp4 by remuxing
+// HLS segments via FFmpeg. Must be called before serving requests.
+func (s *Server) SetMP4Support(ffmpegPath string, port int) {
+	s.ffmpegPath = ffmpegPath
+	s.port = port
 }
 
 // IsSegmentActive returns true if any viewer is currently downloading the segment.
@@ -89,6 +102,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(playerHTML))
+		return
+	}
+
+	// Serve fragmented MP4 stream for players that don't support HLS
+	if r.URL.Path == "/stream.mp4" {
+		s.serveMP4(w, r)
 		return
 	}
 
@@ -146,4 +165,67 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeContent(w, r, "", time.Time{}, f)
+}
+
+// serveMP4 spawns an FFmpeg process that reads the local HLS playlist and
+// remuxes it into a fragmented MP4 stream, piped to the HTTP response.
+// No re-encoding — just copies packets. Killed when the viewer disconnects.
+func (s *Server) serveMP4(w http.ResponseWriter, r *http.Request) {
+	if s.ffmpegPath == "" || s.port == 0 {
+		http.Error(w, "MP4 streaming not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	hlsURL := fmt.Sprintf("http://localhost:%d/stream.m3u8", s.port)
+
+	cmd := exec.CommandContext(r.Context(), s.ffmpegPath,
+		"-hide_banner", "-loglevel", "error",
+		"-re",
+		"-live_start_index", "-1",
+		"-i", hlsURL,
+		"-c", "copy",
+		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+		"-f", "mp4",
+		"pipe:1",
+	)
+	cmd.Stderr = os.Stderr
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		http.Error(w, "failed to create pipe", http.StatusInternalServerError)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		http.Error(w, "failed to start remuxer", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("MP4 viewer connected from %s", r.RemoteAddr)
+
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Transfer-Encoding", "chunked")
+
+	// Stream FFmpeg's stdout to the HTTP response.
+	// When the viewer disconnects, r.Context() is cancelled,
+	// which kills the FFmpeg process via CommandContext.
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := stdout.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				break
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+
+	cmd.Wait()
+	log.Printf("MP4 viewer disconnected from %s", r.RemoteAddr)
 }
