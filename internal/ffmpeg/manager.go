@@ -3,6 +3,7 @@ package ffmpeg
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ type Manager struct {
 	SegmentDir   string
 	MaxRestarts  int
 	RestartDelay time.Duration
+	StderrWriter io.Writer // optional: receives FFmpeg stderr output
 	restartCount int
 	cmd          *exec.Cmd
 }
@@ -87,7 +89,11 @@ func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) er
 
 		m.cmd = exec.CommandContext(ctx, m.FFmpegPath, args...)
 		m.cmd.Stdout = os.Stdout
-		m.cmd.Stderr = os.Stderr
+		if m.StderrWriter != nil {
+			m.cmd.Stderr = m.StderrWriter
+		} else {
+			m.cmd.Stderr = os.Stderr
+		}
 		if audioPipe != nil {
 			m.cmd.Stdin = audioPipe
 		}
