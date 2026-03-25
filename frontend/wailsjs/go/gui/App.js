@@ -9,6 +9,14 @@ export function StopStream() {
   return window['go']['gui']['App']['StopStream']();
 }
 
+export function RestartStream() {
+  return window['go']['gui']['App']['RestartStream']();
+}
+
+export function SwitchMonitor(index) {
+  return window['go']['gui']['App']['SwitchMonitor'](index);
+}
+
 export function GetState() {
   return window['go']['gui']['App']['GetState']();
 }
@@ -55,4 +63,12 @@ export function GetLogEntries() {
 
 export function ShowWindow() {
   return window['go']['gui']['App']['ShowWindow']();
+}
+
+export function GetTunnelProviders() {
+  return window['go']['gui']['App']['GetTunnelProviders']();
+}
+
+export function AuthorizeTunnel(provider) {
+  return window['go']['gui']['App']['AuthorizeTunnel'](provider);
 }

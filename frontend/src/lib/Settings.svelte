@@ -1,7 +1,8 @@
 <script>
   import { onMount, createEventDispatcher } from 'svelte';
   import { GetConfig, SaveConfig, GetSettings, SaveSettings, DetectSystem,
-           ListPresets, SavePreset, DeletePreset } from '../../wailsjs/go/gui/App';
+           ListPresets, SavePreset, DeletePreset, GetState, RestartStream,
+           GetTunnelProviders, AuthorizeTunnel } from '../../wailsjs/go/gui/App';
 
   const dispatch = createEventDispatcher();
 
@@ -9,15 +10,18 @@
   let settings = {};
   let systemInfo = null;
   let presets = [];
+  let tunnelProviders = [];
   let newPresetName = '';
   let error = '';
   let saved = false;
+  let authMessage = '';
 
   onMount(async () => {
     config = await GetConfig();
     settings = await GetSettings();
     systemInfo = await DetectSystem();
     presets = (await ListPresets()) || [];
+    tunnelProviders = (await GetTunnelProviders()) || [];
   });
 
   async function save() {
@@ -25,6 +29,11 @@
     try {
       await SaveConfig(config);
       await SaveSettings(settings);
+      // Restart stream if currently running to apply new settings
+      const state = await GetState();
+      if (state.status === 'streaming') {
+        await RestartStream();
+      }
       saved = true;
       setTimeout(() => saved = false, 2000);
     } catch (err) {
@@ -44,6 +53,17 @@
       newPresetName = '';
     } catch (err) {
       error = err.toString();
+    }
+  }
+
+  async function authorize(provider) {
+    authMessage = '';
+    try {
+      const msg = await AuthorizeTunnel(provider);
+      authMessage = msg;
+      tunnelProviders = (await GetTunnelProviders()) || [];
+    } catch (err) {
+      authMessage = err.toString();
     }
   }
 
@@ -149,6 +169,37 @@
           <option value="tailscale">Tailscale</option>
         </select>
       </div>
+    </div>
+  </section>
+
+  <section class="mb-6">
+    <h2 class="text-lg font-semibold mb-3 text-slate-300">Tunnel Providers</h2>
+    {#if authMessage}
+      <div class="bg-slate-800 border border-slate-700 rounded-md p-3 mb-3 text-slate-300 text-sm">{authMessage}</div>
+    {/if}
+    <div class="space-y-2">
+      {#each tunnelProviders as provider}
+        <div class="flex items-center justify-between bg-slate-800 rounded-md px-4 py-3">
+          <div>
+            <div class="font-medium text-slate-200">{provider.label}</div>
+            <div class="text-xs mt-0.5 {provider.authorized ? 'text-green-400' : provider.installed ? 'text-yellow-400' : 'text-slate-500'}">
+              {provider.statusText}
+            </div>
+          </div>
+          <div>
+            {#if !provider.installed}
+              <span class="text-xs text-slate-500">Not installed</span>
+            {:else if !provider.authorized}
+              <button on:click={() => authorize(provider.name)}
+                class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1 rounded transition-colors">
+                Sign In
+              </button>
+            {:else}
+              <span class="text-xs text-green-400">Ready</span>
+            {/if}
+          </div>
+        </div>
+      {/each}
     </div>
   </section>
 

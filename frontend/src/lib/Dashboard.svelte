@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { StartStream, StopStream, GetState, GetConfig, GetLogEntries } from '../../wailsjs/go/gui/App';
+  import { StartStream, StopStream, RestartStream, GetState, GetConfig, GetLogEntries, DetectSystem, SwitchMonitor } from '../../wailsjs/go/gui/App';
   import { EventsOn, ClipboardSetText } from '../../wailsjs/runtime/runtime';
   import StatsRow from './StatsRow.svelte';
   import EventLog from './EventLog.svelte';
@@ -11,6 +11,7 @@
   let state = { status: 'idle' };
   let config = {};
   let logEntries = [];
+  let monitors = [];
   let copied = false;
   let unsubState;
   let unsubLog;
@@ -19,6 +20,8 @@
     state = await GetState();
     config = await GetConfig();
     logEntries = (await GetLogEntries()) || [];
+    const sysInfo = await DetectSystem();
+    monitors = sysInfo.monitors || [];
     unsubState = EventsOn('stream:state', (s) => { state = s; });
     unsubLog = EventsOn('stream:log', (entries) => { logEntries = entries || []; });
   });
@@ -43,6 +46,25 @@
       state = await GetState();
     } catch (err) {
       console.error('Stop failed:', err);
+    }
+  }
+
+  async function restart() {
+    try {
+      await RestartStream();
+      state = await GetState();
+      config = await GetConfig();
+    } catch (err) {
+      console.error('Restart failed:', err);
+    }
+  }
+
+  async function switchDisplay(index) {
+    try {
+      await SwitchMonitor(index);
+      config = await GetConfig();
+    } catch (err) {
+      console.error('Switch monitor failed:', err);
     }
   }
 
@@ -81,6 +103,9 @@
           {copied ? 'Copied!' : '[copy]'}
         </button>
       </div>
+      <button on:click={restart} class="bg-slate-600 hover:bg-slate-500 text-white font-semibold px-4 py-1.5 rounded-md transition-colors">
+        Restart
+      </button>
       <button on:click={stop} class="bg-red-600 hover:bg-red-500 text-white font-semibold px-4 py-1.5 rounded-md transition-colors">
         Stop
       </button>
@@ -107,6 +132,22 @@
       <button on:click={() => dispatch('openSettings')} class="text-sky-400 hover:text-sky-300 text-sm mt-4">
         Settings
       </button>
+      {#if monitors.length > 1}
+        <div class="mt-4">
+          <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Display</div>
+          <div class="flex gap-1">
+            {#each monitors as mon}
+              <button
+                on:click={() => switchDisplay(mon.index)}
+                class="w-9 h-7 rounded text-xs font-bold transition-colors flex items-center justify-center {config.monitor === mon.index ? 'bg-sky-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}"
+                title="{mon.name} ({mon.resolution})"
+              >
+                {mon.index + 1}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
     </div>
     <EventLog entries={logEntries} />
   </div>

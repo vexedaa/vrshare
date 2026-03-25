@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 var trycloudflareRe = regexp.MustCompile(`https://[a-zA-Z0-9-]+\.trycloudflare\.com`)
@@ -37,6 +38,7 @@ func StartCloudflare(ctx context.Context, localPort int) (*Tunnel, error) {
 
 	localURL := fmt.Sprintf("http://localhost:%d", localPort)
 	cmd := exec.CommandContext(ctx, cloudflaredPath, "tunnel", "--url", localURL)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	cmd.Stdout = os.Stdout
 
 	stderr, err := cmd.StderrPipe()
@@ -51,6 +53,7 @@ func StartCloudflare(ctx context.Context, localPort int) (*Tunnel, error) {
 	t := &Tunnel{cmd: cmd}
 
 	urlCh := make(chan string, 1)
+	errCh := make(chan error, 1)
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
@@ -61,11 +64,19 @@ func StartCloudflare(ctx context.Context, localPort int) (*Tunnel, error) {
 			}
 		}
 	}()
+	go func() {
+		errCh <- cmd.Wait()
+	}()
 
 	select {
 	case url := <-urlCh:
 		t.URL = url
 		return t, nil
+	case err := <-errCh:
+		if err != nil {
+			return nil, fmt.Errorf("cloudflared exited: %w", err)
+		}
+		return nil, fmt.Errorf("cloudflared exited without providing URL")
 	case <-ctx.Done():
 		cmd.Process.Kill()
 		return nil, ctx.Err()
@@ -81,6 +92,7 @@ func StartTailscale(ctx context.Context, localPort int) (*Tunnel, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, tailscalePath, "funnel", fmt.Sprintf("%d", localPort))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -100,6 +112,7 @@ func StartTailscale(ctx context.Context, localPort int) (*Tunnel, error) {
 	// tailscale funnel outputs the URL to stdout like:
 	// https://machine-name.tailnet.ts.net/
 	urlCh := make(chan string, 1)
+	errCh := make(chan error, 1)
 	tsURLRe := regexp.MustCompile(`https://[a-zA-Z0-9.-]+\.ts\.net`)
 
 	go func() {
@@ -118,11 +131,19 @@ func StartTailscale(ctx context.Context, localPort int) (*Tunnel, error) {
 			log.Printf("[tailscale] %s", scanner.Text())
 		}
 	}()
+	go func() {
+		errCh <- cmd.Wait()
+	}()
 
 	select {
 	case url := <-urlCh:
 		t.URL = url
 		return t, nil
+	case err := <-errCh:
+		if err != nil {
+			return nil, fmt.Errorf("tailscale exited: %w", err)
+		}
+		return nil, fmt.Errorf("tailscale exited without providing URL")
 	case <-ctx.Done():
 		cmd.Process.Kill()
 		return nil, ctx.Err()

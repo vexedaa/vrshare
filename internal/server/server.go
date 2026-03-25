@@ -24,13 +24,23 @@ type Server struct {
 	startTime  time.Time
 	streamURL  string
 	errMsg     string
-	cancel     context.CancelFunc
-	done       chan struct{}
+
+	// Server-level context (HLS, janitor, tunnel, audio)
+	srvCancel  context.CancelFunc
+	srvCtx     context.Context
+
+	// FFmpeg-level context (can be restarted independently)
+	ffmpegCancel context.CancelFunc
+	ffmpegDone   chan struct{}
+
 	hlsSrv     *hls.Server
+	httpSrv    *http.Server
 	stats      *StatsParser
 	ffmpegPath string
 	useDDAgrab bool
 	encoder    string
+	segDir     string
+	audioPipe  *os.File
 	logEntries []LogEntry
 	logMu      sync.Mutex
 }
@@ -84,17 +94,18 @@ func (s *Server) Start(ctx context.Context) error {
 		s.setError("Failed to create segment dir: " + err.Error())
 		return err
 	}
+	s.segDir = segDir
 
 	// Start HLS server
 	s.hlsSrv = hls.NewServer(segDir)
 	s.hlsSrv.SetMP4Support(ffmpegPath, s.cfg.Port)
-	httpSrv := &http.Server{
+	s.httpSrv = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.cfg.Port),
 		Handler: s.hlsSrv,
 	}
 
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
+		if err := s.httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Printf("HTTP server error: %v", err)
 		}
 	}()
@@ -106,33 +117,30 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 	s.log("Stream URL: " + s.streamURL)
 
-	// Start janitor
-	srvCtx, cancel := context.WithCancel(ctx)
-	s.cancel = cancel
-	s.done = make(chan struct{})
+	// Server-level context for long-lived services
+	s.srvCtx, s.srvCancel = context.WithCancel(ctx)
 
-	go hls.RunJanitor(srvCtx, segDir, s.hlsSrv, 5*time.Second)
+	go hls.RunJanitor(s.srvCtx, segDir, s.hlsSrv, 5*time.Second)
 
 	// Start audio if enabled
-	var audioPipe *os.File
 	if s.cfg.Audio {
 		s.log("Audio capture enabled")
 		r, w, err := os.Pipe()
 		if err != nil {
-			cancel()
-			httpSrv.Shutdown(context.Background())
+			s.srvCancel()
+			s.httpSrv.Shutdown(context.Background())
 			s.setError("Failed to create audio pipe: " + err.Error())
 			return err
 		}
-		audioPipe = r
+		s.audioPipe = r
 		ac := newAudioCapturer(w)
-		go ac.start(srvCtx)
+		go ac.start(s.srvCtx)
 	}
 
 	// Start tunnel if configured
 	if s.cfg.Tunnel != "" {
 		s.log("Starting tunnel: " + s.cfg.Tunnel)
-		tun, err := tunnel.Start(srvCtx, s.cfg.Tunnel, s.cfg.Port)
+		tun, err := tunnel.Start(s.srvCtx, s.cfg.Tunnel, s.cfg.Port)
 		if err != nil {
 			s.log("Tunnel warning: " + err.Error())
 		} else {
@@ -143,13 +151,12 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Build FFmpeg args and start
-	args := ffmpeg.BuildArgs(s.cfg, s.encoder, segDir, s.useDDAgrab)
-	mgr := ffmpeg.NewManager(ffmpegPath, segDir)
-
-	// Hook stats parser
-	s.stats = NewStatsParser(os.Stderr)
-	mgr.StderrWriter = s.stats
+	// Start FFmpeg
+	if err := s.startFFmpeg(); err != nil {
+		s.srvCancel()
+		s.httpSrv.Shutdown(context.Background())
+		return err
+	}
 
 	s.mu.Lock()
 	s.status = "streaming"
@@ -157,27 +164,68 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 	s.log("Stream started")
 
-	// Run FFmpeg in background
+	return nil
+}
+
+// startFFmpeg launches the FFmpeg process with current config.
+func (s *Server) startFFmpeg() error {
+	args := ffmpeg.BuildArgs(s.cfg, s.encoder, s.segDir, s.useDDAgrab)
+	mgr := ffmpeg.NewManager(s.ffmpegPath, s.segDir)
+
+	s.stats = NewStatsParser(os.Stderr)
+	mgr.StderrWriter = s.stats
+
+	ffCtx, ffCancel := context.WithCancel(s.srvCtx)
+	s.ffmpegCancel = ffCancel
+	s.ffmpegDone = make(chan struct{})
+
 	go func() {
-		defer close(s.done)
-		if err := mgr.Run(srvCtx, args, audioPipe); err != nil {
-			if srvCtx.Err() == nil {
+		defer close(s.ffmpegDone)
+		if err := mgr.Run(ffCtx, args, s.audioPipe); err != nil {
+			if ffCtx.Err() == nil && s.srvCtx.Err() == nil {
 				s.setError("FFmpeg error: " + err.Error())
 			}
 		}
-		httpSrv.Shutdown(context.Background())
-		mgr.Cleanup()
-		s.mu.Lock()
-		if s.status != "error" {
-			s.status = "idle"
-		}
-		s.mu.Unlock()
 	}()
 
 	return nil
 }
 
-// Stop gracefully stops the streaming pipeline.
+// RestartCapture stops only FFmpeg and relaunches it with current config.
+// The HLS server, tunnel, and audio capturer stay running.
+func (s *Server) RestartCapture() error {
+	s.mu.Lock()
+	if s.status != "streaming" {
+		s.mu.Unlock()
+		return fmt.Errorf("not streaming")
+	}
+	s.mu.Unlock()
+
+	s.log("Restarting capture...")
+
+	// Stop FFmpeg only
+	if s.ffmpegCancel != nil {
+		s.ffmpegCancel()
+	}
+	if s.ffmpegDone != nil {
+		<-s.ffmpegDone
+	}
+
+	// Re-probe encoder in case config changed
+	probe := ffmpeg.ProbeFFmpegEncoder(s.ffmpegPath)
+	s.encoder = ffmpeg.ResolveEncoder(string(s.cfg.Encoder), probe)
+
+	// Relaunch FFmpeg
+	if err := s.startFFmpeg(); err != nil {
+		s.setError("Failed to restart capture: " + err.Error())
+		return err
+	}
+
+	s.log("Capture restarted")
+	return nil
+}
+
+// Stop gracefully stops the entire streaming pipeline.
 func (s *Server) Stop() error {
 	s.mu.Lock()
 	if s.status != "streaming" && s.status != "starting" {
@@ -187,12 +235,20 @@ func (s *Server) Stop() error {
 	s.mu.Unlock()
 
 	s.log("Stopping stream...")
-	if s.cancel != nil {
-		s.cancel()
+
+	// Cancel server context (stops FFmpeg, janitor, tunnel, audio)
+	if s.srvCancel != nil {
+		s.srvCancel()
 	}
-	if s.done != nil {
-		<-s.done
+	// Wait for FFmpeg to exit
+	if s.ffmpegDone != nil {
+		<-s.ffmpegDone
 	}
+	// Shut down HTTP server
+	if s.httpSrv != nil {
+		s.httpSrv.Shutdown(context.Background())
+	}
+
 	s.mu.Lock()
 	s.status = "idle"
 	s.mu.Unlock()

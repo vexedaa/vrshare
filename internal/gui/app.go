@@ -15,11 +15,12 @@ import (
 
 // App is the Wails application struct with frontend bindings.
 type App struct {
-	ctx     context.Context
-	srv     *server.Server
-	dataDir string
-	ticker  *time.Ticker
-	done    chan struct{}
+	ctx      context.Context
+	srv      *server.Server
+	dataDir  string
+	ticker   *time.Ticker
+	done     chan struct{}
+	quitting bool // set when quit is requested from tray
 }
 
 // NewApp creates a new App instance and sets up debug logging.
@@ -52,10 +53,12 @@ func (a *App) Startup(ctx context.Context) {
 		cfg = config.Default()
 	}
 	a.srv = server.New(cfg)
+	a.setupTray()
 }
 
 // Shutdown is called when the Wails app is closing.
 func (a *App) Shutdown(_ context.Context) {
+	a.removeTray()
 	a.stopStatsTicker()
 	if a.srv != nil {
 		a.srv.Stop()
@@ -64,15 +67,21 @@ func (a *App) Shutdown(_ context.Context) {
 
 // BeforeClose handles window close based on user settings.
 func (a *App) BeforeClose(_ context.Context) bool {
+	// If quit was requested from tray, always allow
+	if a.quitting {
+		return false
+	}
+
 	settings, err := server.LoadSettings(a.dataDir)
 	if err != nil || settings.CloseBehavior == "quit" {
+		a.removeTray()
 		if a.srv != nil {
 			a.srv.Stop()
 		}
 		return false // allow close
 	}
-	// Minimize to tray
-	runtime.WindowHide(a.ctx)
+	// Minimize to taskbar (keeps stream running, click taskbar to restore)
+	runtime.WindowMinimise(a.ctx)
 	return true // prevent close
 }
 
@@ -82,12 +91,33 @@ func (a *App) StartStream() error {
 		return err
 	}
 	a.startStatsTicker()
+	a.UpdateTrayIcon(true)
+	return nil
+}
+
+// RestartStream restarts only the capture (FFmpeg) with current config.
+// The HLS server, tunnel, and audio stay running.
+func (a *App) RestartStream() error {
+	return a.srv.RestartCapture()
+}
+
+// SwitchMonitor changes the capture monitor and restarts FFmpeg.
+func (a *App) SwitchMonitor(index int) error {
+	cfg := a.srv.Config()
+	cfg.Monitor = index
+	a.srv.SetConfig(cfg)
+	server.SaveConfig(a.dataDir, cfg)
+	state := a.srv.State()
+	if state.Status == "streaming" {
+		return a.srv.RestartCapture()
+	}
 	return nil
 }
 
 // StopStream stops the streaming server.
 func (a *App) StopStream() error {
 	a.stopStatsTicker()
+	a.UpdateTrayIcon(false)
 	return a.srv.Stop()
 }
 
@@ -144,6 +174,26 @@ func (a *App) GetSettings() (server.AppSettings, error) {
 // SaveSettings saves app settings.
 func (a *App) SaveSettings(s server.AppSettings) error {
 	return server.SaveSettings(a.dataDir, s)
+}
+
+// TunnelProviderStatus describes the state of a tunnel provider.
+type TunnelProviderStatus struct {
+	Name       string `json:"name"`       // "cloudflare" or "tailscale"
+	Label      string `json:"label"`      // human-readable
+	Installed  bool   `json:"installed"`  // binary found on PATH
+	Authorized bool   `json:"authorized"` // logged in / ready to use
+	StatusText string `json:"statusText"` // e.g. "Ready", "Not installed", "Not logged in"
+}
+
+// GetTunnelProviders returns the status of all supported tunnel providers.
+func (a *App) GetTunnelProviders() []TunnelProviderStatus {
+	return checkTunnelProviders()
+}
+
+// AuthorizeTunnel initiates authorization for a tunnel provider.
+// Returns a message describing what happened (e.g. "Opening browser for login").
+func (a *App) AuthorizeTunnel(provider string) (string, error) {
+	return authorizeTunnel(provider)
 }
 
 // GetLogEntries returns recent log entries.
