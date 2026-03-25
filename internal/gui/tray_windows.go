@@ -67,6 +67,10 @@ var (
 	procDestroyMenu          = trayUser32.NewProc("DestroyMenu")
 	procGetCursorPos         = trayUser32.NewProc("GetCursorPos")
 	procSetForegroundWindow  = trayUser32.NewProc("SetForegroundWindow")
+	procFindWindow           = trayUser32.NewProc("FindWindowW")
+	procSendMessage          = trayUser32.NewProc("SendMessageW")
+	procLoadImage            = trayUser32.NewProc("LoadImageW")
+	procGetModuleHandle      = syscall.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW")
 	procDestroyIcon          = trayUser32.NewProc("DestroyIcon")
 	procCreateIconIndirect   = trayUser32.NewProc("CreateIconIndirect")
 	procGetSystemMetricsTray = trayUser32.NewProc("GetSystemMetrics")
@@ -241,8 +245,38 @@ func tintIcon(img image.Image, tintR, tintG, tintB uint8, tintWhite bool) uintpt
 	return icon
 }
 
+// setWindowIcon sets the Wails window icon from the exe's embedded resource.
+func (a *App) setWindowIcon() {
+	const WM_SETICON = 0x0080
+	const ICON_SMALL = 0
+	const ICON_BIG = 1
+	const IMAGE_ICON = 1
+	const LR_DEFAULTSIZE = 0x00000040
+
+	// Load icon from the exe's embedded resource (put there by .syso)
+	hModule, _, _ := procGetModuleHandle.Call(0)
+	// Resource ID "APP" maps to ordinal 1 in go-winres
+	smallIcon, _, _ := procLoadImage.Call(hModule, 1, IMAGE_ICON, 16, 16, LR_DEFAULTSIZE)
+	bigIcon, _, _ := procLoadImage.Call(hModule, 1, IMAGE_ICON, 32, 32, LR_DEFAULTSIZE)
+
+	// Find the Wails window by title
+	title, _ := syscall.UTF16PtrFromString("VRShare")
+	hwnd, _, _ := procFindWindow.Call(0, uintptr(unsafe.Pointer(title)))
+	if hwnd != 0 {
+		if smallIcon != 0 {
+			procSendMessage.Call(hwnd, WM_SETICON, ICON_SMALL, smallIcon)
+		}
+		if bigIcon != 0 {
+			procSendMessage.Call(hwnd, WM_SETICON, ICON_BIG, bigIcon)
+		}
+	}
+}
+
 func (a *App) setupTray() {
 	trayApp = a
+
+	// Set the Wails window icon from the exe resource
+	a.setWindowIcon()
 
 	// Pre-create tinted icons
 	img := loadIconImage()

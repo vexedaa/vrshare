@@ -1330,7 +1330,7 @@ Create `wails.json` in the project root:
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "VexedAA"
+    "name": "Vexedaa"
   }
 }
 ```
