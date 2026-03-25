@@ -24,7 +24,7 @@ func main() {
 	cfg := config.Default()
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
-	flag.BoolVar(&cfg.Tunnel, "tunnel", cfg.Tunnel, "Enable Cloudflare tunnel")
+	tunnelProvider := flag.String("tunnel", "", "Tunnel provider: cloudflare, tailscale (empty = disabled)")
 	flag.IntVar(&cfg.Monitor, "monitor", cfg.Monitor, "Monitor index to capture (0 = primary)")
 	flag.IntVar(&cfg.FPS, "fps", cfg.FPS, "Capture framerate")
 	flag.StringVar(&cfg.Resolution, "resolution", cfg.Resolution, "Output resolution (WxH, empty for native)")
@@ -118,25 +118,30 @@ func main() {
 
 	// Start tunnel if requested
 	var tun *tunnel.Tunnel
-	if cfg.Tunnel {
-		log.Println("Starting Cloudflare tunnel...")
-		tun, err = tunnel.Start(ctx, cfg.Port)
+	if *tunnelProvider != "" {
+		log.Printf("Starting %s tunnel...", *tunnelProvider)
+		tun, err = tunnel.Start(ctx, *tunnelProvider, cfg.Port)
 		if err != nil {
 			log.Printf("Warning: tunnel failed: %v (continuing without tunnel)", err)
 		} else {
 			hlsURL := tun.StreamURL()
-			mp4URL := strings.TrimRight(tun.URL, "/") + "/stream.mp4"
+			mp4URL := tun.MP4URL()
 			fmt.Printf("  Tunnel: %s (HLS)\n", hlsURL)
 			fmt.Printf("          %s (MP4)\n", mp4URL)
-			if clipErr := copyToClipboard(mp4URL); clipErr == nil {
+			// Tailscale supports long-lived connections, so MP4 works.
+			// Cloudflare kills long connections, so prefer HLS.
+			clipURL := mp4URL
+			if *tunnelProvider == "cloudflare" {
+				clipURL = hlsURL
+			}
+			if clipErr := copyToClipboard(clipURL); clipErr == nil {
 				fmt.Println()
-				fmt.Println("MP4 stream URL copied to clipboard! (works with all video players)")
+				fmt.Printf("Stream URL copied to clipboard!\n")
 			}
 		}
 	}
 
 	fmt.Println()
-	fmt.Println("Use the MP4 URL for maximum compatibility with VRChat players.")
 	fmt.Println("Press Ctrl+C to stop.")
 	fmt.Println()
 

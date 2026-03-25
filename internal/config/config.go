@@ -17,9 +17,8 @@ const (
 )
 
 type Config struct {
-	Port       int
-	Tunnel     bool
-	Monitor    int
+	Port    int
+	Monitor int
 	FPS        int
 	Resolution string // "WxH" or "" for native
 	Bitrate    int    // kbps
@@ -30,7 +29,6 @@ type Config struct {
 func Default() Config {
 	return Config{
 		Port:    8080,
-		Tunnel:  false,
 		Monitor: 0,
 		FPS:     30,
 		Bitrate: 4000,
