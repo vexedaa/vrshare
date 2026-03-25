@@ -58,16 +58,16 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 	switch resolvedEncoder {
 	case "nvenc":
 		args = append(args, "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll",
-			"-profile:v", "baseline", "-level", "auto")
+			"-profile:v", "baseline", "-level:v", "auto")
 	case "qsv":
 		args = append(args, "-c:v", "h264_qsv", "-preset", "veryfast",
-			"-profile:v", "baseline", "-level", "auto")
+			"-profile:v", "baseline", "-level:v", "auto")
 	case "amf":
 		args = append(args, "-c:v", "h264_amf", "-quality", "speed",
-			"-profile:v", "baseline", "-level", "auto")
+			"-profile:v", "baseline", "-level:v", "auto")
 	default:
 		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-			"-profile:v", "baseline", "-level", "auto")
+			"-profile:v", "baseline", "-level:v", "auto")
 	}
 
 	args = append(args, "-b:v", fmt.Sprintf("%dk", cfg.Bitrate))
