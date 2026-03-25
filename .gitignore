@@ -2,6 +2,7 @@
 /vrshare
 /vrshare.exe
 *.exe
+!bundle/ffmpeg/*.exe
 
 # IDE
 .idea/
@@ -22,5 +23,4 @@ frontend/dist/
 
 # Git worktrees
 .worktrees/
-vrshare.exe~
 *~
