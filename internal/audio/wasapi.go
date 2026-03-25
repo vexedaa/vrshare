@@ -60,6 +60,11 @@ var (
 		Data1: 0x41D949AB, Data2: 0x9862, Data3: 0x444A,
 		Data4: [8]byte{0x80, 0xF6, 0xC2, 0x61, 0x33, 0x4D, 0xA5, 0xEB},
 	}
+	// {94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90}
+	IID_IAgileObject = syscall.GUID{
+		Data1: 0x94EA2B94, Data2: 0xE9CC, Data3: 0x49E0,
+		Data4: [8]byte{0xC0, 0xFF, 0xEE, 0x64, 0xCA, 0x8F, 0x5B, 0x90},
+	}
 )
 
 // WAVEFORMATEX defines the PCM audio format.
@@ -162,7 +167,7 @@ func newCompletionHandler() *completionHandler {
 
 func handlerQueryInterface(this uintptr, riid uintptr, ppv uintptr) uintptr {
 	iid := (*syscall.GUID)(unsafe.Pointer(riid))
-	if *iid == IID_IUnknown || *iid == IID_IActivateAudioInterfaceCompletionHandler {
+	if *iid == IID_IUnknown || *iid == IID_IActivateAudioInterfaceCompletionHandler || *iid == IID_IAgileObject {
 		*(*uintptr)(unsafe.Pointer(ppv)) = this
 		handlerAddRef(this)
 		return 0 // S_OK

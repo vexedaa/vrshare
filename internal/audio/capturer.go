@@ -53,12 +53,19 @@ func (c *Capturer) captureLoop(ctx context.Context) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	hr, _, _ := procCoInitializeEx.Call(0, coINIT_MULTITHREADED)
+	// Initialize WinRT (required for ActivateAudioInterfaceAsync)
+	hr, _, _ := procRoInitialize.Call(1) // RO_INIT_MULTITHREADED
 	if hr != 0 && hr != 1 {
-		log.Printf("Audio: CoInitializeEx failed: 0x%x", hr)
-		return
+		log.Printf("Audio: RoInitialize failed: 0x%x, trying CoInitializeEx", hr)
+		hr, _, _ = procCoInitializeEx.Call(0, coINIT_MULTITHREADED)
+		if hr != 0 && hr != 1 {
+			log.Printf("Audio: CoInitializeEx failed: 0x%x", hr)
+			return
+		}
+		defer procCoUninitialize.Call()
+	} else {
+		defer procRoUninitialize.Call()
 	}
-	defer procCoUninitialize.Call()
 
 	for {
 		select {
