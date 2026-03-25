@@ -12,6 +12,16 @@ import (
 	"unsafe"
 )
 
+const (
+	// WASAPI buffer flags
+	AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY = 0x1
+	AUDCLNT_BUFFERFLAGS_SILENT             = 0x2
+
+	// PCM format: 2 channels, 16-bit, 48kHz = 4 bytes per frame
+	bytesPerFrame = 4
+	sampleRate    = 48000
+)
+
 // Capturer captures system audio via WASAPI, excluding VRChat's audio.
 type Capturer struct {
 	writer        io.Writer
@@ -19,11 +29,17 @@ type Capturer struct {
 	mu            sync.Mutex
 	cancelFunc    context.CancelFunc
 	sessionCancel context.CancelFunc
+	silenceBuf    []byte // pre-allocated silence buffer
 }
 
 // NewCapturer creates a new audio capturer that writes PCM data to w.
 func NewCapturer(w io.Writer) *Capturer {
-	return &Capturer{writer: w}
+	// Pre-allocate a silence buffer (10ms worth of silence)
+	silenceFrames := sampleRate / 100 // 480 frames = 10ms
+	return &Capturer{
+		writer:     w,
+		silenceBuf: make([]byte, silenceFrames*bytesPerFrame),
+	}
 }
 
 // Start begins audio capture in a background goroutine.
@@ -80,8 +96,15 @@ func (c *Capturer) captureLoop(ctx context.Context) {
 
 		audioClient, err := c.activateLoopback(pid)
 		if err != nil {
-			log.Printf("Audio: WASAPI activation failed: %v — disabling audio", err)
-			return
+			log.Printf("Audio: WASAPI activation failed: %v — retrying in 1s", err)
+			// Write silence while we retry to keep FFmpeg's audio stream continuous
+			c.writeSilence(1 * time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
+			}
+			continue
 		}
 
 		sessionCtx, sessionCancel := context.WithCancel(ctx)
@@ -101,7 +124,24 @@ func (c *Capturer) captureLoop(ctx context.Context) {
 		if err != nil {
 			log.Printf("Audio: capture session ended: %v — restarting", err)
 		}
+
+		// Write silence during the gap to keep audio continuous
+		c.writeSilence(100 * time.Millisecond)
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// writeSilence writes zero PCM data for the given duration to keep FFmpeg fed.
+func (c *Capturer) writeSilence(d time.Duration) {
+	frames := int(d.Seconds() * sampleRate)
+	remaining := frames * bytesPerFrame
+	for remaining > 0 {
+		n := len(c.silenceBuf)
+		if n > remaining {
+			n = remaining
+		}
+		c.writer.Write(c.silenceBuf[:n])
+		remaining -= n
 	}
 }
 
@@ -231,9 +271,20 @@ func (c *Capturer) readBuffers(captureClient uintptr) {
 			break
 		}
 
-		// Each frame = 4 bytes (2 channels * 16-bit)
-		byteCount := int(numFrames) * 4
-		if data != 0 && byteCount > 0 {
+		byteCount := int(numFrames) * bytesPerFrame
+
+		if flags&AUDCLNT_BUFFERFLAGS_SILENT != 0 {
+			// Buffer is silent — write zeroes instead of potentially garbage data
+			remaining := byteCount
+			for remaining > 0 {
+				n := len(c.silenceBuf)
+				if n > remaining {
+					n = remaining
+				}
+				c.writer.Write(c.silenceBuf[:n])
+				remaining -= n
+			}
+		} else if data != 0 && byteCount > 0 {
 			buf := unsafe.Slice((*byte)(unsafe.Pointer(data)), byteCount)
 			c.writer.Write(buf)
 		}
