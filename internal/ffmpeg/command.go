@@ -72,9 +72,18 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 
 	args = append(args, "-b:v", fmt.Sprintf("%dk", cfg.Bitrate))
 
-	// Video filter chain: ddagrab outputs D3D11 hardware frames which need
-	// hwdownload for any software processing (scaling, format conversion).
-	if useDD {
+	// Video filter chain: ddagrab outputs D3D11 hardware frames.
+	// GPU encoders (nvenc/amf/qsv) accept D3D11 frames directly — no
+	// hwdownload needed. CPU encoders require hwdownload to get software frames.
+	if useDD && isGPUEncoder(resolvedEncoder) {
+		// GPU encoder: pass D3D11 hw frames directly to encoder.
+		// If scaling is requested, we must download to CPU for that.
+		if cfg.Resolution != "" {
+			scaled := strings.Replace(cfg.Resolution, "x", ":", 1)
+			args = append(args, "-vf", "hwdownload,format=bgra,scale="+scaled+",format=yuv420p")
+		}
+	} else if useDD {
+		// CPU encoder: must download hw frames to software
 		vf := "hwdownload,format=bgra,format=yuv420p"
 		if cfg.Resolution != "" {
 			scaled := strings.Replace(cfg.Resolution, "x", ":", 1)

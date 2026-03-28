@@ -31,10 +31,11 @@ func SaveConfig(dir string, cfg config.Config) error {
 // LoadConfig reads config from dir/config.json.
 // Returns Default() if file doesn't exist.
 func LoadConfig(dir string) (config.Config, error) {
-	var cfg config.Config
+	defaults := config.Default()
+	cfg := defaults // start with defaults so new fields have sane values
 	err := readJSON(filepath.Join(dir, "config.json"), &cfg)
 	if errors.Is(err, os.ErrNotExist) {
-		return config.Default(), nil
+		return defaults, nil
 	}
 	return cfg, err
 }

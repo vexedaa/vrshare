@@ -97,7 +97,16 @@ func TestBuildArgs_DDAgrab_GPUEncoder(t *testing.T) {
 	assertContains(t, args, "-f", "lavfi")
 	assertContains(t, args, "-i", "ddagrab=output_idx=0:framerate=30")
 	assertContains(t, args, "-c:v", "h264_nvenc")
-	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p")
+	// GPU encoder: no hwdownload — D3D11 hw frames passed directly
+	assertNotContains(t, args, "-vf")
+}
+
+func TestBuildArgs_DDAgrab_GPUEncoder_AMF(t *testing.T) {
+	cfg := config.Default()
+	args := BuildArgs(cfg, "amf", "/tmp/vrshare", true)
+	assertContains(t, args, "-c:v", "h264_amf")
+	// AMF should also get D3D11 hw frames directly
+	assertNotContains(t, args, "-vf")
 }
 
 func TestBuildArgs_DDAgrab_CPUEncoder(t *testing.T) {
@@ -106,6 +115,7 @@ func TestBuildArgs_DDAgrab_CPUEncoder(t *testing.T) {
 	assertContains(t, args, "-f", "lavfi")
 	assertContains(t, args, "-i", "ddagrab=output_idx=0:framerate=30")
 	assertContains(t, args, "-c:v", "libx264")
+	// CPU encoder must hwdownload
 	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p")
 }
 
@@ -120,7 +130,8 @@ func TestBuildArgs_DDAgrab_GPUEncoder_WithResolution(t *testing.T) {
 	cfg := config.Default()
 	cfg.Resolution = "1280x720"
 	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
-	assertContains(t, args, "-vf", "hwdownload,format=bgra,format=yuv420p,scale=1280:720")
+	// Scaling requires hwdownload even for GPU encoders
+	assertContains(t, args, "-vf", "hwdownload,format=bgra,scale=1280:720,format=yuv420p")
 }
 
 func TestBuildArgs_DDAgrab_MonitorIndex(t *testing.T) {

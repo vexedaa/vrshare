@@ -3,10 +3,14 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/wailsapp/wails/v2"
@@ -113,6 +117,8 @@ func attachParentConsole() {
 }
 
 func launchGUI() {
+	defer writeCrashLog()
+
 	app := gui.NewApp()
 
 	err := wails.Run(&options.App{
@@ -146,4 +152,28 @@ func launchGUI() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// writeCrashLog catches panics and writes a crash log to ~/.vrshare/logs/.
+func writeCrashLog() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		panic(r) // can't log, re-panic
+	}
+	logsDir := filepath.Join(home, ".vrshare", "logs")
+	os.MkdirAll(logsDir, 0755)
+	name := fmt.Sprintf("crash-%s.log", time.Now().Format("2006-01-02_15-04-05"))
+	f, err := os.Create(filepath.Join(logsDir, name))
+	if err != nil {
+		panic(r)
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "VRShare crashed at %s\n\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(f, "Panic: %v\n\n", r)
+	fmt.Fprintf(f, "Stack trace:\n%s\n", debug.Stack())
+	log.Printf("Crash log written to %s", filepath.Join(logsDir, name))
 }
