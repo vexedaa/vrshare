@@ -36,22 +36,22 @@ func NewManager(ffmpegPath, segmentDir string) *Manager {
 }
 
 // FindFFmpeg looks for ffmpeg in these locations (in order):
-//  1. ~/.vrshare/ffmpeg/ (user's custom builds)
-//  2. ./ffmpeg/ (bundled with release zip)
+//  1. Bundled alongside the executable (installed by our installer)
+//  2. ~/.vrshare/ffmpeg/ (downloaded via GUI)
 //  3. System PATH
 func FindFFmpeg() (string, error) {
-	// Check user cache dir first (custom builds)
-	cacheDir := defaultCacheDir()
-	if path, err := findFFmpegInDir(cacheDir); err == nil {
-		return path, nil
-	}
-
-	// Check alongside the executable (bundled release)
+	// Check alongside the executable first (bundled/installed)
 	if exePath, err := os.Executable(); err == nil {
 		bundleDir := filepath.Join(filepath.Dir(exePath), "ffmpeg")
 		if path, err := findFFmpegInDir(bundleDir); err == nil {
 			return path, nil
 		}
+	}
+
+	// Check user cache dir (downloaded via GUI)
+	cacheDir := defaultCacheDir()
+	if path, err := findFFmpegInDir(cacheDir); err == nil {
+		return path, nil
 	}
 
 	// Fall back to PATH
