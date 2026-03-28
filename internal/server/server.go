@@ -186,13 +186,14 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // startFFmpeg launches the FFmpeg process with current config.
+// If FFmpeg crashes repeatedly, it falls back to safer settings
+// (CPU encoder, gdigrab) before giving up entirely.
 func (s *Server) startFFmpeg() error {
-	args := ffmpeg.BuildArgs(s.cfg, s.encoder, s.segDir, s.useDDAgrab)
-	mgr := ffmpeg.NewManager(s.ffmpegPath, s.segDir)
+	encoder := s.encoder
+	useDDAgrab := s.useDDAgrab
 
 	s.stats = NewStatsParser(os.Stderr)
 	s.stats.LogFunc = func(line string) { s.log("FFmpeg: " + line) }
-	mgr.StderrWriter = s.stats
 
 	ffCtx, ffCancel := context.WithCancel(s.srvCtx)
 	s.ffmpegCancel = ffCancel
@@ -200,19 +201,46 @@ func (s *Server) startFFmpeg() error {
 
 	go func() {
 		defer close(s.ffmpegDone)
-		err := mgr.Run(ffCtx, args, s.audioPipe)
-		// If the FFmpeg context was cancelled, this is intentional
-		// (user clicked Stop, app is closing, or RestartCapture was called).
-		if ffCtx.Err() != nil {
-			return
+
+		// Try up to 3 configurations: original → cpu encoder → cpu+gdigrab
+		configs := []struct {
+			encoder    string
+			useDDAgrab bool
+			label      string
+		}{
+			{encoder, useDDAgrab, ""},
+			{"cpu", useDDAgrab, "falling back to CPU encoder"},
+			{"cpu", false, "falling back to CPU encoder + gdigrab"},
 		}
-		// FFmpeg exited while we were still supposed to be streaming.
-		// Clean up all resources so the user can start a new stream.
-		msg := "Stream ended unexpectedly"
-		if err != nil {
-			msg = "FFmpeg error: " + err.Error()
+
+		for i, c := range configs {
+			if ffCtx.Err() != nil {
+				return
+			}
+			// Skip redundant fallbacks (e.g., already using cpu)
+			if i > 0 && c.encoder == configs[i-1].encoder && c.useDDAgrab == configs[i-1].useDDAgrab {
+				continue
+			}
+			if c.label != "" {
+				s.log("FFmpeg: " + c.label)
+			}
+
+			args := ffmpeg.BuildArgs(s.cfg, c.encoder, s.segDir, c.useDDAgrab)
+			mgr := ffmpeg.NewManager(s.ffmpegPath, s.segDir)
+			mgr.StderrWriter = s.stats
+			mgr.MaxRestarts = 2 // fewer retries per config before falling back
+
+			err := mgr.Run(ffCtx, args, s.audioPipe)
+			if ffCtx.Err() != nil {
+				return
+			}
+			if err == nil {
+				return
+			}
+			s.log(fmt.Sprintf("FFmpeg: config %d failed: %v", i+1, err))
 		}
-		s.failStream(msg)
+
+		s.failStream("FFmpeg failed with all encoder configurations")
 	}()
 
 	return nil
