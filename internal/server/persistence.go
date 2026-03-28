@@ -101,6 +101,63 @@ func DeletePreset(dir, name string) error {
 	return os.Remove(filepath.Join(dir, "presets", sanitizeName(name)+".json"))
 }
 
+// SessionLogEntry describes a past session log file.
+type SessionLogEntry struct {
+	Name    string `json:"name"`    // filename
+	Date    string `json:"date"`    // human-readable date
+	Size    int64  `json:"size"`    // bytes
+}
+
+// ListSessionLogs returns available session log files, newest first.
+func ListSessionLogs(dir string) ([]SessionLogEntry, error) {
+	logsDir := filepath.Join(dir, "logs")
+	entries, err := os.ReadDir(logsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var logs []SessionLogEntry
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if !strings.HasSuffix(e.Name(), ".log") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		// Parse date from filename: session-2026-03-28_15-04-05.log
+		date := e.Name()
+		date = strings.TrimPrefix(date, "session-")
+		date = strings.TrimSuffix(date, ".log")
+		date = strings.Replace(date, "_", " ", 1)
+
+		logs = append(logs, SessionLogEntry{
+			Name: e.Name(),
+			Date: date,
+			Size: info.Size(),
+		})
+	}
+	return logs, nil
+}
+
+// ReadSessionLog returns the contents of a session log file.
+func ReadSessionLog(dir, name string) (string, error) {
+	// Prevent path traversal
+	clean := filepath.Base(name)
+	if !strings.HasSuffix(clean, ".log") {
+		return "", errors.New("invalid log file")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "logs", clean))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 func sanitizeName(name string) string {
 	r := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "*", "_", "?", "_", "\"", "_", "<", "_", ">", "_", "|", "_")
 	return r.Replace(name)

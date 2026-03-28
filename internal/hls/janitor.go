@@ -34,7 +34,11 @@ func CleanOldSegments(dir string, srv *Server) (int, error) {
 
 	removed := 0
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".ts" {
+		if entry.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		if ext != ".ts" && ext != ".m4s" {
 			continue
 		}
 		if referenced[entry.Name()] {
@@ -62,8 +66,26 @@ func parsePlaylistSegments(path string) (map[string]bool, error) {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if strings.HasSuffix(line, ".ts") {
+		if strings.HasSuffix(line, ".ts") || strings.HasSuffix(line, ".m4s") {
 			segments[line] = true
+		}
+		// Parse EXT-X-MAP URI for init segment
+		if strings.HasPrefix(line, "#EXT-X-MAP:") {
+			if start := strings.Index(line, "URI=\""); start != -1 {
+				start += 5
+				if end := strings.Index(line[start:], "\""); end != -1 {
+					segments[line[start:start+end]] = true
+				}
+			}
+		}
+		// Parse EXT-X-PART URI for partial segments
+		if strings.HasPrefix(line, "#EXT-X-PART:") {
+			if start := strings.Index(line, "URI=\""); start != -1 {
+				start += 5
+				if end := strings.Index(line[start:], "\""); end != -1 {
+					segments[line[start:start+end]] = true
+				}
+			}
 		}
 	}
 	return segments, scanner.Err()

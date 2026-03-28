@@ -24,18 +24,20 @@ type Config struct {
 	Bitrate     int         `json:"bitrate"`
 	Encoder     EncoderType `json:"encoder"`
 	Audio       bool        `json:"audio"`
+	AudioGain   int         `json:"audioGain"` // dB boost, 0 = no change, default 6
 	AudioDevice string      `json:"audioDevice"`
 	Tunnel      string      `json:"tunnel"`
 }
 
 func Default() Config {
 	return Config{
-		Port:    8080,
-		FPS:     30,
-		Bitrate: 4000,
-		Encoder: EncoderAuto,
-		Audio:   false,
-		Tunnel:  "",
+		Port:      8080,
+		FPS:       30,
+		Bitrate:   4000,
+		Encoder:   EncoderAuto,
+		Audio:     false,
+		AudioGain: 6,
+		Tunnel:    "",
 	}
 }
 
@@ -51,6 +53,9 @@ func (c Config) Validate() error {
 	}
 	if c.Monitor < 0 {
 		return fmt.Errorf("monitor must be >= 0, got %d", c.Monitor)
+	}
+	if c.AudioGain < -20 || c.AudioGain > 30 {
+		return fmt.Errorf("audio gain must be between -20 and 30 dB, got %d", c.AudioGain)
 	}
 	if c.Resolution != "" {
 		if _, _, err := ParseResolution(c.Resolution); err != nil {

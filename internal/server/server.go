@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -44,6 +45,7 @@ type Server struct {
 	audioPipe  *os.File
 	logEntries []LogEntry
 	logMu      sync.Mutex
+	logFile    *os.File
 }
 
 // LogEntry is a timestamped log message.
@@ -71,6 +73,9 @@ func (s *Server) Start(ctx context.Context) error {
 	s.errMsg = ""
 	s.logEntries = nil
 	s.mu.Unlock()
+
+	// Open persistent log file for this session
+	s.openSessionLog()
 
 	// Kill orphaned FFmpeg/tunnel processes from previous crashed sessions.
 	// This is critical because ddagrab (DXGI Desktop Duplication) only allows
@@ -128,9 +133,10 @@ func (s *Server) Start(ctx context.Context) error {
 	// Server-level context for long-lived services
 	s.srvCtx, s.srvCancel = context.WithCancel(ctx)
 
-	go hls.RunJanitor(s.srvCtx, segDir, s.hlsSrv, 5*time.Second)
+	go hls.RunJanitor(s.srvCtx, segDir, s.hlsSrv, 2*time.Second)
 
-	// Start audio if enabled
+	// Create audio pipe if enabled (FFmpeg needs the read-end at startup)
+	var ac *audioCapturer
 	if s.cfg.Audio {
 		s.log("Audio capture enabled")
 		r, w, err := os.Pipe()
@@ -141,8 +147,7 @@ func (s *Server) Start(ctx context.Context) error {
 			return err
 		}
 		s.audioPipe = r
-		ac := newAudioCapturer(s.srvCtx, w)
-		go ac.start(s.srvCtx)
+		ac = newAudioCapturer(s.srvCtx, w)
 	}
 
 	// Start tunnel if configured
@@ -160,11 +165,15 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start FFmpeg
+	// Start FFmpeg first, then audio capturer — this order prevents stale
+	// audio from accumulating in the buffer during tunnel/startup delays.
 	if err := s.startFFmpeg(); err != nil {
 		s.srvCancel()
 		s.httpSrv.Shutdown(context.Background())
 		return err
+	}
+	if ac != nil {
+		go ac.start(s.srvCtx)
 	}
 
 	s.mu.Lock()
@@ -182,6 +191,7 @@ func (s *Server) startFFmpeg() error {
 	mgr := ffmpeg.NewManager(s.ffmpegPath, s.segDir)
 
 	s.stats = NewStatsParser(os.Stderr)
+	s.stats.LogFunc = func(line string) { s.log("FFmpeg: " + line) }
 	mgr.StderrWriter = s.stats
 
 	ffCtx, ffCancel := context.WithCancel(s.srvCtx)
@@ -191,9 +201,9 @@ func (s *Server) startFFmpeg() error {
 	go func() {
 		defer close(s.ffmpegDone)
 		err := mgr.Run(ffCtx, args, s.audioPipe)
-		// If the server context was cancelled, this is a normal shutdown
-		// (user clicked Stop or app is closing). No cleanup needed here.
-		if s.srvCtx.Err() != nil {
+		// If the FFmpeg context was cancelled, this is intentional
+		// (user clicked Stop, app is closing, or RestartCapture was called).
+		if ffCtx.Err() != nil {
 			return
 		}
 		// FFmpeg exited while we were still supposed to be streaming.
@@ -263,6 +273,11 @@ func (s *Server) Stop() error {
 	if s.ffmpegDone != nil {
 		<-s.ffmpegDone
 	}
+	// Close audio pipe read-end (write-end is closed by AsyncWriter)
+	if s.audioPipe != nil {
+		s.audioPipe.Close()
+		s.audioPipe = nil
+	}
 	// Explicitly stop tunnel process (don't rely on context alone)
 	if tun != nil {
 		tun.Stop()
@@ -277,6 +292,7 @@ func (s *Server) Stop() error {
 	s.errMsg = ""
 	s.mu.Unlock()
 	s.log("Stream stopped")
+	s.closeSessionLog()
 	return nil
 }
 
@@ -342,6 +358,15 @@ func (s *Server) failStream(msg string) {
 	if s.srvCancel != nil {
 		s.srvCancel()
 	}
+	// Wait for FFmpeg to exit before closing the audio pipe
+	if s.ffmpegDone != nil {
+		<-s.ffmpegDone
+	}
+	// Close audio pipe read-end (write-end is closed by AsyncWriter)
+	if s.audioPipe != nil {
+		s.audioPipe.Close()
+		s.audioPipe = nil
+	}
 	// Stop tunnel process
 	if tun != nil {
 		tun.Stop()
@@ -350,6 +375,7 @@ func (s *Server) failStream(msg string) {
 	if s.httpSrv != nil {
 		s.httpSrv.Shutdown(context.Background())
 	}
+	s.closeSessionLog()
 }
 
 func (s *Server) setError(msg string) {
@@ -361,13 +387,41 @@ func (s *Server) setError(msg string) {
 }
 
 func (s *Server) log(msg string) {
+	now := time.Now()
 	s.logMu.Lock()
 	s.logEntries = append(s.logEntries, LogEntry{
-		Time:    time.Now(),
+		Time:    now,
 		Message: msg,
 	})
+	if s.logFile != nil {
+		fmt.Fprintf(s.logFile, "%s  %s\n", now.Format("15:04:05"), msg)
+	}
 	s.logMu.Unlock()
 	log.Println(msg)
+}
+
+func (s *Server) openSessionLog() {
+	dir, err := DataDir()
+	if err != nil {
+		return
+	}
+	logsDir := filepath.Join(dir, "logs")
+	os.MkdirAll(logsDir, 0755)
+	name := fmt.Sprintf("session-%s.log", time.Now().Format("2006-01-02_15-04-05"))
+	f, err := os.Create(filepath.Join(logsDir, name))
+	if err != nil {
+		return
+	}
+	s.logFile = f
+}
+
+func (s *Server) closeSessionLog() {
+	s.logMu.Lock()
+	if s.logFile != nil {
+		s.logFile.Close()
+		s.logFile = nil
+	}
+	s.logMu.Unlock()
 }
 
 func getOutboundIP() string {

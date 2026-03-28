@@ -213,11 +213,26 @@ func (a *App) GetLogEntries() []server.LogEntry {
 	return a.srv.LogEntries()
 }
 
-// startStatsTicker emits stream:state events every second.
+// ListSessionLogs returns available past session log files.
+func (a *App) ListSessionLogs() ([]server.SessionLogEntry, error) {
+	return server.ListSessionLogs(a.dataDir)
+}
+
+// ReadSessionLog returns the contents of a past session log.
+func (a *App) ReadSessionLog(name string) (string, error) {
+	return server.ReadSessionLog(a.dataDir, name)
+}
+
+// startStatsTicker emits stream:state events every second and monitors
+// encoding speed to auto-restart FFmpeg when it falls behind and recovers.
 func (a *App) startStatsTicker() {
 	a.ticker = time.NewTicker(1 * time.Second)
 	a.done = make(chan struct{})
 	go func() {
+		var slowTicks int    // consecutive ticks where speed < 0.9
+		var recoveredTicks int // consecutive ticks where speed >= 0.95 after a lag
+		var lastRestart time.Time
+
 		for {
 			select {
 			case <-a.ticker.C:
@@ -225,6 +240,27 @@ func (a *App) startStatsTicker() {
 				runtime.EventsEmit(a.ctx, "stream:state", state)
 				entries := a.srv.LogEntries()
 				runtime.EventsEmit(a.ctx, "stream:log", entries)
+
+				// Lag detection: restart FFmpeg when it recovers from sustained slowdown
+				if state.Status == "streaming" && state.Speed > 0 {
+					if state.Speed < 0.9 {
+						slowTicks++
+						recoveredTicks = 0
+					} else if slowTicks >= 3 && state.Speed >= 0.95 {
+						// Was slow for 3+ seconds, now recovered
+						recoveredTicks++
+						if recoveredTicks >= 2 && time.Since(lastRestart) > 30*time.Second {
+							log.Printf("Auto-restarting capture after %ds of lag (speed recovered to %.2fx)", slowTicks, state.Speed)
+							go a.srv.RestartCapture()
+							slowTicks = 0
+							recoveredTicks = 0
+							lastRestart = time.Now()
+						}
+					} else {
+						slowTicks = 0
+						recoveredTicks = 0
+					}
+				}
 			case <-a.done:
 				return
 			}

@@ -3,6 +3,7 @@
   import Wizard from './lib/Wizard.svelte';
   import Dashboard from './lib/Dashboard.svelte';
   import Settings from './lib/Settings.svelte';
+  import PastLogs from './lib/PastLogs.svelte';
   import { GetSettings } from '../wailsjs/go/gui/App';
 
   let view = 'loading';
@@ -27,6 +28,14 @@
   function onCloseSettings() {
     view = 'dashboard';
   }
+
+  function onOpenPastLogs() {
+    view = 'pastLogs';
+  }
+
+  function onClosePastLogs() {
+    view = 'dashboard';
+  }
 </script>
 
 <main class="min-h-screen bg-slate-900 text-slate-200">
@@ -37,7 +46,9 @@
   {:else if view === 'wizard'}
     <Wizard on:complete={onWizardComplete} />
   {:else if view === 'dashboard'}
-    <Dashboard on:openSettings={onOpenSettings} />
+    <Dashboard on:openSettings={onOpenSettings} on:openPastLogs={onOpenPastLogs} />
+  {:else if view === 'pastLogs'}
+    <PastLogs on:close={onClosePastLogs} />
   {:else if view === 'settings'}
     <Settings on:close={onCloseSettings} />
   {/if}

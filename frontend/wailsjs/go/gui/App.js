@@ -80,3 +80,11 @@ export function GetTunnelProviders() {
 export function AuthorizeTunnel(provider) {
   return window['go']['gui']['App']['AuthorizeTunnel'](provider);
 }
+
+export function ListSessionLogs() {
+  return window['go']['gui']['App']['ListSessionLogs']();
+}
+
+export function ReadSessionLog(name) {
+  return window['go']['gui']['App']['ReadSessionLog'](name);
+}

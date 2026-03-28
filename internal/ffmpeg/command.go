@@ -88,6 +88,9 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 
 	// Audio encoding
 	if cfg.Audio {
+		if cfg.AudioGain != 0 {
+			args = append(args, "-af", fmt.Sprintf("volume=%ddB", cfg.AudioGain))
+		}
 		args = append(args, "-c:a", "aac", "-b:a", "128k")
 	}
 
@@ -97,8 +100,8 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 	args = append(args,
 		"-f", "hls",
 		"-hls_time", "1",
-		"-hls_list_size", "3",
-		"-hls_flags", "append_list",
+		"-hls_list_size", "2",
+		"-hls_flags", "append_list+delete_segments",
 		"-hls_segment_filename", filepath.Join(segmentDir, "segment_%d.ts"),
 		filepath.Join(segmentDir, "stream.m3u8"),
 	)

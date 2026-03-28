@@ -19,7 +19,8 @@ func TestBuildArgs_Defaults(t *testing.T) {
 	assertContains(t, args, "-g", "30")
 	assertContains(t, args, "-f", "hls")
 	assertContains(t, args, "-hls_time", "1")
-	assertContains(t, args, "-hls_list_size", "3")
+	assertContains(t, args, "-hls_list_size", "2")
+	assertContains(t, args, "-hls_flags", "append_list+delete_segments")
 	assertNotContains(t, args, "-vf")
 }
 
@@ -134,6 +135,7 @@ func TestBuildArgs_DDAgrab_CustomFPS(t *testing.T) {
 	cfg.FPS = 60
 	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
 	assertContains(t, args, "-i", "ddagrab=output_idx=0:framerate=60")
+	assertContains(t, args, "-g", "60")
 	assertNotContains(t, args, "-framerate")
 }
 
@@ -146,9 +148,20 @@ func TestBuildArgs_AudioEnabled(t *testing.T) {
 	assertContains(t, args, "-ar", "48000")
 	assertContains(t, args, "-ac", "2")
 	assertContains(t, args, "-i", "pipe:0")
+	assertContains(t, args, "-af", "volume=6dB")
 	assertContains(t, args, "-c:a", "aac")
 	assertContains(t, args, "-b:a", "128k")
 	assertNotContains(t, args, "dshow")
+}
+
+func TestBuildArgs_AudioGainZero(t *testing.T) {
+	cfg := config.Default()
+	cfg.Audio = true
+	cfg.AudioGain = 0
+	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
+
+	assertNotContains(t, args, "-af")
+	assertContains(t, args, "-c:a", "aac")
 }
 
 func TestBuildArgs_AudioDisabled(t *testing.T) {

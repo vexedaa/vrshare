@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { StartStream, StopStream, RestartStream, GetState, GetConfig, GetLogEntries, DetectSystem, SwitchMonitor, HasFFmpeg, DownloadFFmpeg } from '../../wailsjs/go/gui/App';
+  import { StartStream, StopStream, RestartStream, GetState, GetConfig, SaveConfig, GetLogEntries, DetectSystem, SwitchMonitor, HasFFmpeg, DownloadFFmpeg } from '../../wailsjs/go/gui/App';
   import { EventsOn, ClipboardSetText } from '../../wailsjs/runtime/runtime';
   import StatsRow from './StatsRow.svelte';
   import EventLog from './EventLog.svelte';
@@ -76,6 +76,16 @@
       config = await GetConfig();
     } catch (err) {
       console.error('Restart failed:', err);
+    }
+  }
+
+  async function changeVolume() {
+    try {
+      await SaveConfig(config);
+      await RestartStream();
+      config = await GetConfig();
+    } catch (err) {
+      console.error('Volume change failed:', err);
     }
   }
 
@@ -168,6 +178,14 @@
           </div>
         </div>
       {/if}
+      {#if config.audio}
+        <div class="mt-4">
+          <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Volume ({config.audioGain ?? 6} dB)</div>
+          <input type="range" bind:value={config.audioGain} min="-20" max="30" step="1"
+            on:change={changeVolume}
+            class="w-full accent-sky-500" />
+        </div>
+      {/if}
     </div>
     <EventLog entries={logEntries} />
   </div>
@@ -192,9 +210,14 @@
       {/if}
       <div class="text-3xl mb-2">Ready to stream</div>
       <div class="text-sm">Select a preset and click Start Stream</div>
-      <button on:click={() => dispatch('openSettings')} class="text-sky-400 hover:text-sky-300 text-sm mt-4 block mx-auto">
-        Settings
-      </button>
+      <div class="flex gap-4 justify-center mt-4">
+        <button on:click={() => dispatch('openSettings')} class="text-sky-400 hover:text-sky-300 text-sm">
+          Settings
+        </button>
+        <button on:click={() => dispatch('openPastLogs')} class="text-sky-400 hover:text-sky-300 text-sm">
+          Past Logs
+        </button>
+      </div>
     </div>
   </div>
 {/if}

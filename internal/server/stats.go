@@ -19,11 +19,13 @@ type EncodingStats struct {
 // StatsParser wraps an io.Writer and parses FFmpeg progress output.
 // Handles both the classic stderr format and -progress pipe:2 key=value format.
 // If inner is nil, output is discarded after parsing.
+// Non-progress lines (errors, warnings) are forwarded to LogFunc if set.
 type StatsParser struct {
-	inner  io.Writer
-	mu     sync.Mutex
-	latest EncodingStats
-	buf    []byte
+	inner   io.Writer
+	LogFunc func(string) // called with non-progress stderr lines
+	mu      sync.Mutex
+	latest  EncodingStats
+	buf     []byte
 	// Accumulate key=value pairs between "progress=" lines
 	pending EncodingStats
 }
@@ -57,6 +59,9 @@ func (p *StatsParser) Write(data []byte) (int, error) {
 			p.mu.Lock()
 			p.latest = stats
 			p.mu.Unlock()
+		} else if p.LogFunc != nil && line != "" {
+			// Non-progress line (error, warning, info from FFmpeg)
+			p.LogFunc(line)
 		}
 	}
 

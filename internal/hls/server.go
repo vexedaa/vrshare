@@ -1,6 +1,7 @@
 package hls
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +33,7 @@ video{max-width:100%;max-height:100vh}
 <script>
 var video=document.getElementById("v");
 if(Hls.isSupported()){
-  var hls=new Hls({liveSyncDurationCount:1,liveMaxLatencyDurationCount:3,lowLatencyMode:true});
+  var hls=new Hls({liveSyncDurationCount:1,liveMaxLatencyDurationCount:2,lowLatencyMode:true,maxLiveSyncPlaybackRate:1.5,backBufferLength:0});
   hls.loadSource("/stream.m3u8");
   hls.attachMedia(video);
   hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play()});
@@ -45,20 +47,22 @@ if(Hls.isSupported()){
 // Server serves HLS segments, tracks active downloads, and provides
 // a fragmented MP4 endpoint for players that don't support HLS.
 type Server struct {
-	dir        string
-	port       int
-	ffmpegPath string
-	active     map[string]int    // segment name -> active reader count
-	activeMu   sync.Mutex
-	viewers    map[string]time.Time // IP -> last seen time
-	viewersMu  sync.Mutex
+	dir          string
+	port         int
+	ffmpegPath   string
+	blockTimeout time.Duration
+	active       map[string]int       // segment name -> active reader count
+	activeMu     sync.Mutex
+	viewers      map[string]time.Time // IP -> last seen time
+	viewersMu    sync.Mutex
 }
 
 func NewServer(dir string) *Server {
 	return &Server{
-		dir:     dir,
-		active:  make(map[string]int),
-		viewers: make(map[string]time.Time),
+		dir:          dir,
+		blockTimeout: 5 * time.Second,
+		active:       make(map[string]int),
+		viewers:      make(map[string]time.Time),
 	}
 }
 
@@ -149,9 +153,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// then re-clean so we work with the OS separator for file operations.
 	name = filepath.FromSlash(name)
 
-	// Only serve .m3u8 and .ts files
+	// Only serve HLS-related files
 	ext := strings.ToLower(filepath.Ext(name))
-	if ext != ".m3u8" && ext != ".ts" {
+	if ext != ".m3u8" && ext != ".ts" && ext != ".m4s" && ext != ".mp4" {
 		http.NotFound(w, r)
 		return
 	}
@@ -181,6 +185,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
+	// LL-HLS blocking playlist: if _HLS_msn is present, wait until the
+	// playlist contains the requested media sequence number.
+	if ext == ".m3u8" {
+		if msnStr := r.URL.Query().Get("_HLS_msn"); msnStr != "" {
+			msn, _ := strconv.Atoi(msnStr)
+			s.waitForMSN(fullPath, msn, s.blockTimeout)
+		}
+	}
+
 	// Set content type and cache headers BEFORE calling ServeContent so they
 	// are not overwritten by Go's content-sniffing logic.
 	switch ext {
@@ -191,12 +204,54 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case ".ts":
 		w.Header().Set("Content-Type", "video/mp2t")
 		w.Header().Set("Cache-Control", "max-age=3600")
-		// Track active segment downloads
+		s.trackStart(name)
+		defer s.trackEnd(name)
+	case ".m4s", ".mp4":
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Cache-Control", "max-age=3600")
 		s.trackStart(name)
 		defer s.trackEnd(name)
 	}
 
 	http.ServeContent(w, r, "", time.Time{}, f)
+}
+
+// waitForMSN polls the playlist file until it contains the given media
+// sequence number or the timeout expires. It checks every 50ms.
+func (s *Server) waitForMSN(playlistPath string, targetMSN int, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if s.playlistContainsMSN(playlistPath, targetMSN) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// playlistContainsMSN returns true if the playlist file references enough
+// segments to cover the target media sequence number. It counts segment
+// entries (lines ending in .m4s or .ts) from the EXT-X-MEDIA-SEQUENCE base.
+func (s *Server) playlistContainsMSN(path string, targetMSN int) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	baseMSN := 0
+	segCount := 0
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "#EXT-X-MEDIA-SEQUENCE:") {
+			baseMSN, _ = strconv.Atoi(strings.TrimPrefix(line, "#EXT-X-MEDIA-SEQUENCE:"))
+		}
+		if strings.HasSuffix(line, ".m4s") || strings.HasSuffix(line, ".ts") {
+			segCount++
+		}
+	}
+	// The highest MSN present is baseMSN + segCount - 1
+	return segCount > 0 && baseMSN+segCount-1 >= targetMSN
 }
 
 // serveMP4 spawns an FFmpeg process that reads the local HLS playlist and

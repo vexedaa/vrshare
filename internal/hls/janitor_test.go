@@ -69,6 +69,47 @@ func TestCleanOldSegments_EmptyDir(t *testing.T) {
 	}
 }
 
+func TestCleanOldSegments_RemovesFMP4Files(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create init.mp4 and m4s segments
+	os.WriteFile(filepath.Join(dir, "init.mp4"), []byte("init"), 0644)
+	for i := 0; i <= 5; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("segment_%d.m4s", i))
+		os.WriteFile(name, []byte("data"), 0644)
+	}
+
+	// Playlist references segments 3-5
+	playlist := "#EXTM3U\n#EXT-X-TARGETDURATION:1\n" +
+		"#EXT-X-MAP:URI=\"init.mp4\"\n" +
+		"#EXTINF:0.5,\nsegment_3.m4s\n" +
+		"#EXTINF:0.5,\nsegment_4.m4s\n" +
+		"#EXTINF:0.5,\nsegment_5.m4s\n"
+	os.WriteFile(filepath.Join(dir, "stream.m3u8"), []byte(playlist), 0644)
+
+	removed, err := CleanOldSegments(dir, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if removed != 3 {
+		t.Errorf("expected 3 removed, got %d", removed)
+	}
+
+	// init.mp4 should NOT be removed (referenced via EXT-X-MAP)
+	if _, err := os.Stat(filepath.Join(dir, "init.mp4")); os.IsNotExist(err) {
+		t.Error("init.mp4 should not be removed")
+	}
+
+	// Referenced segments should still exist
+	for i := 3; i <= 5; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("segment_%d.m4s", i))
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("segment_%d.m4s should still exist", i)
+		}
+	}
+}
+
 func TestCleanOldSegments_SkipsActiveSegments(t *testing.T) {
 	dir := t.TempDir()
 

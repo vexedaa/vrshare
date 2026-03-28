@@ -150,6 +150,16 @@
           {/each}
         </select>
       </div>
+      <div class="mt-3">
+        <label class="text-xs text-slate-400 block mb-1">Volume Boost ({config.audioGain ?? 6} dB)</label>
+        <input type="range" bind:value={config.audioGain} min="-20" max="30" step="1"
+          class="w-full accent-sky-500" />
+        <div class="flex justify-between text-xs text-slate-600 mt-0.5">
+          <span>-20 dB</span>
+          <span>0 dB</span>
+          <span>+30 dB</span>
+        </div>
+      </div>
     {/if}
   </section>
 

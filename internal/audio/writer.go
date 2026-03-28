@@ -5,6 +5,8 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // AsyncWriter buffers audio data between the WASAPI capturer and the OS pipe
@@ -15,11 +17,12 @@ import (
 // A background goroutine drains buffered data to the underlying writer. The
 // writer is closed when the context is cancelled or a pipe write fails.
 type AsyncWriter struct {
-	ch   chan []byte
-	w    io.WriteCloser
-	done chan struct{}
-	werr error
-	mu   sync.Mutex
+	ch      chan []byte
+	w       io.WriteCloser
+	done    chan struct{}
+	werr    error
+	mu      sync.Mutex
+	dropped atomic.Int64
 }
 
 // NewAsyncWriter wraps w with a buffered channel of bufSlots entries. Each
@@ -33,6 +36,7 @@ func NewAsyncWriter(ctx context.Context, w io.WriteCloser, bufSlots int) *AsyncW
 		done: make(chan struct{}),
 	}
 	go aw.drain(ctx)
+	go aw.logDrops(ctx)
 	return aw
 }
 
@@ -52,7 +56,7 @@ func (aw *AsyncWriter) Write(p []byte) (int, error) {
 	select {
 	case aw.ch <- buf:
 	default:
-		// Buffer full — drop this chunk rather than blocking the capturer.
+		aw.dropped.Add(1)
 	}
 	return len(p), nil
 }
@@ -72,6 +76,22 @@ func (aw *AsyncWriter) drain(ctx context.Context) {
 				aw.mu.Unlock()
 				log.Printf("Audio: pipe write error: %v — audio delivery stopped", err)
 				return
+			}
+		}
+	}
+}
+
+// logDrops periodically reports how many audio chunks were dropped.
+func (aw *AsyncWriter) logDrops(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n := aw.dropped.Swap(0); n > 0 {
+				log.Printf("Audio: dropped %d chunks (FFmpeg not reading fast enough)", n)
 			}
 		}
 	}

@@ -52,9 +52,13 @@ jobs:
           Copy-Item -Recurse bundle/ffmpeg release/ffmpeg
           Compress-Archive -Path release/* -DestinationPath vrshare-windows-x64.zip
 
+      - name: Build installer
+        run: iscc installer.iss
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             vrshare-windows-x64.zip
+            VRShare-Setup.exe
           generate_release_notes: true
