@@ -21,7 +21,7 @@ func TestBuildArgs_Defaults(t *testing.T) {
 	assertContains(t, args, "-hls_time", "1")
 	assertContains(t, args, "-hls_list_size", "2")
 	assertContains(t, args, "-hls_flags", "append_list+delete_segments")
-	assertNotContains(t, args, "-vf")
+	assertContains(t, args, "-vf", "format=yuv420p")
 }
 
 func TestBuildArgs_CustomFPSAndBitrate(t *testing.T) {
@@ -40,7 +40,7 @@ func TestBuildArgs_WithResolution(t *testing.T) {
 	cfg.Resolution = "1280x720"
 	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
 
-	assertContains(t, args, "-vf", "scale=1280:720")
+	assertContains(t, args, "-vf", "scale=1280:720,format=yuv420p")
 }
 
 func TestBuildArgs_NVENCEncoder(t *testing.T) {

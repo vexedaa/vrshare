@@ -57,17 +57,13 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 
 	switch resolvedEncoder {
 	case "nvenc":
-		args = append(args, "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll",
-			"-profile:v", "baseline", "-level:v", "auto")
+		args = append(args, "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll")
 	case "qsv":
-		args = append(args, "-c:v", "h264_qsv", "-preset", "veryfast",
-			"-profile:v", "baseline", "-level:v", "auto")
+		args = append(args, "-c:v", "h264_qsv", "-preset", "veryfast")
 	case "amf":
-		args = append(args, "-c:v", "h264_amf", "-quality", "speed",
-			"-profile:v", "baseline", "-level:v", "auto")
+		args = append(args, "-c:v", "h264_amf", "-quality", "speed")
 	default:
-		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-			"-profile:v", "baseline", "-level:v", "auto")
+		args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency")
 	}
 
 	args = append(args, "-b:v", fmt.Sprintf("%dk", cfg.Bitrate))
@@ -90,9 +86,14 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 			vf += ",scale=" + scaled
 		}
 		args = append(args, "-vf", vf)
-	} else if cfg.Resolution != "" {
-		scaled := strings.Replace(cfg.Resolution, "x", ":", 1)
-		args = append(args, "-vf", fmt.Sprintf("scale=%s", scaled))
+	} else if !useDD {
+		// gdigrab outputs BGRA which needs conversion to yuv420p for encoding.
+		vf := "format=yuv420p"
+		if cfg.Resolution != "" {
+			scaled := strings.Replace(cfg.Resolution, "x", ":", 1)
+			vf = "scale=" + scaled + "," + vf
+		}
+		args = append(args, "-vf", vf)
 	}
 
 	// Audio encoding
