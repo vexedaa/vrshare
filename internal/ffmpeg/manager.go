@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -19,6 +21,7 @@ type Manager struct {
 	MaxRestarts  int
 	RestartDelay time.Duration
 	StderrWriter io.Writer // optional: receives FFmpeg stderr output
+	LogFunc      func(string) // optional: receives log messages for session log
 	restartCount int
 	cmd          *exec.Cmd
 }
@@ -91,6 +94,8 @@ func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) er
 		return fmt.Errorf("creating segment dir: %w", err)
 	}
 
+	m.logf("FFmpeg command: %s %s", m.FFmpegPath, strings.Join(args, " "))
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -98,13 +103,17 @@ func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) er
 		default:
 		}
 
+		// Capture stderr in a buffer so we can report it on crash,
+		// while also forwarding to StderrWriter for live parsing.
+		var stderrBuf stderrCapture
+		stderrBuf.limit = 4096
+		if m.StderrWriter != nil {
+			stderrBuf.forward = m.StderrWriter
+		}
+
 		m.cmd = exec.CommandContext(ctx, m.FFmpegPath, args...)
 		m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		if m.StderrWriter != nil {
-			m.cmd.Stderr = m.StderrWriter
-		} else {
-			m.cmd.Stderr = os.Stderr
-		}
+		m.cmd.Stderr = &stderrBuf
 		if audioPipe != nil {
 			m.cmd.Stdin = audioPipe
 		}
@@ -117,12 +126,16 @@ func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) er
 		}
 
 		if err != nil {
+			errDetail := strings.TrimSpace(stderrBuf.String())
+			if errDetail != "" {
+				m.logf("FFmpeg stderr: %s", errDetail)
+			}
 			log.Printf("FFmpeg exited with error: %v", err)
 			if !m.shouldRestart() {
 				return fmt.Errorf("FFmpeg crashed %d times, giving up: %w", m.restartCount, err)
 			}
 			m.recordRestart()
-			log.Printf("Restarting FFmpeg in %v (restart %d/%d)", m.RestartDelay, m.restartCount, m.MaxRestarts)
+			m.logf("Restarting FFmpeg (attempt %d/%d)", m.restartCount, m.MaxRestarts)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -151,4 +164,46 @@ func (m *Manager) Stop() {
 
 func (m *Manager) Cleanup() {
 	os.RemoveAll(m.SegmentDir)
+}
+
+func (m *Manager) logf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	log.Println(msg)
+	if m.LogFunc != nil {
+		m.LogFunc(msg)
+	}
+}
+
+// stderrCapture captures stderr output (up to a limit) while optionally
+// forwarding to another writer. Used to include stderr in error messages
+// when FFmpeg crashes before producing any progress output.
+type stderrCapture struct {
+	mu      sync.Mutex
+	buf     []byte
+	limit   int
+	forward io.Writer
+}
+
+func (s *stderrCapture) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	if len(s.buf) < s.limit {
+		remaining := s.limit - len(s.buf)
+		n := len(p)
+		if n > remaining {
+			n = remaining
+		}
+		s.buf = append(s.buf, p[:n]...)
+	}
+	s.mu.Unlock()
+
+	if s.forward != nil {
+		return s.forward.Write(p)
+	}
+	return len(p), nil
+}
+
+func (s *stderrCapture) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return string(s.buf)
 }

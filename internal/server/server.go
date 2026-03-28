@@ -228,6 +228,7 @@ func (s *Server) startFFmpeg() error {
 			args := ffmpeg.BuildArgs(s.cfg, c.encoder, s.segDir, c.useDDAgrab)
 			mgr := ffmpeg.NewManager(s.ffmpegPath, s.segDir)
 			mgr.StderrWriter = s.stats
+			mgr.LogFunc = func(msg string) { s.log("FFmpeg: " + msg) }
 			mgr.MaxRestarts = 2 // fewer retries per config before falling back
 
 			err := mgr.Run(ffCtx, args, s.audioPipe)
