@@ -72,6 +72,11 @@ func (s *Server) Start(ctx context.Context) error {
 	s.logEntries = nil
 	s.mu.Unlock()
 
+	// Kill orphaned FFmpeg/tunnel processes from previous crashed sessions.
+	// This is critical because ddagrab (DXGI Desktop Duplication) only allows
+	// one capture per display — a zombie FFmpeg will block new captures.
+	killZombies(s.cfg.Port)
+
 	s.log("Starting server...")
 
 	// Find FFmpeg
@@ -97,16 +102,18 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	s.segDir = segDir
 
-	// Start HLS server
+	// Start HLS server — bind the port first so we fail fast if it's in use
 	s.hlsSrv = hls.NewServer(segDir)
 	s.hlsSrv.SetMP4Support(ffmpegPath, s.cfg.Port)
-	s.httpSrv = &http.Server{
-		Addr:    fmt.Sprintf(":%d", s.cfg.Port),
-		Handler: s.hlsSrv,
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.Port))
+	if err != nil {
+		s.setError(fmt.Sprintf("Port %d is already in use (is another instance running?)", s.cfg.Port))
+		return fmt.Errorf("port %d already in use", s.cfg.Port)
 	}
+	s.httpSrv = &http.Server{Handler: s.hlsSrv}
 
 	go func() {
-		if err := s.httpSrv.ListenAndServe(); err != http.ErrServerClosed {
+		if err := s.httpSrv.Serve(ln); err != http.ErrServerClosed {
 			log.Printf("HTTP server error: %v", err)
 		}
 	}()
@@ -134,7 +141,7 @@ func (s *Server) Start(ctx context.Context) error {
 			return err
 		}
 		s.audioPipe = r
-		ac := newAudioCapturer(w)
+		ac := newAudioCapturer(s.srvCtx, w)
 		go ac.start(s.srvCtx)
 	}
 
@@ -183,11 +190,19 @@ func (s *Server) startFFmpeg() error {
 
 	go func() {
 		defer close(s.ffmpegDone)
-		if err := mgr.Run(ffCtx, args, s.audioPipe); err != nil {
-			if ffCtx.Err() == nil && s.srvCtx.Err() == nil {
-				s.setError("FFmpeg error: " + err.Error())
-			}
+		err := mgr.Run(ffCtx, args, s.audioPipe)
+		// If the server context was cancelled, this is a normal shutdown
+		// (user clicked Stop or app is closing). No cleanup needed here.
+		if s.srvCtx.Err() != nil {
+			return
 		}
+		// FFmpeg exited while we were still supposed to be streaming.
+		// Clean up all resources so the user can start a new stream.
+		msg := "Stream ended unexpectedly"
+		if err != nil {
+			msg = "FFmpeg error: " + err.Error()
+		}
+		s.failStream(msg)
 	}()
 
 	return nil
@@ -230,10 +245,12 @@ func (s *Server) RestartCapture() error {
 // Stop gracefully stops the entire streaming pipeline.
 func (s *Server) Stop() error {
 	s.mu.Lock()
-	if s.status != "streaming" && s.status != "starting" {
+	if s.status == "idle" {
 		s.mu.Unlock()
 		return nil
 	}
+	tun := s.tun
+	s.tun = nil
 	s.mu.Unlock()
 
 	s.log("Stopping stream...")
@@ -247,9 +264,8 @@ func (s *Server) Stop() error {
 		<-s.ffmpegDone
 	}
 	// Explicitly stop tunnel process (don't rely on context alone)
-	if s.tun != nil {
-		s.tun.Stop()
-		s.tun = nil
+	if tun != nil {
+		tun.Stop()
 	}
 	// Shut down HTTP server
 	if s.httpSrv != nil {
@@ -258,6 +274,7 @@ func (s *Server) Stop() error {
 
 	s.mu.Lock()
 	s.status = "idle"
+	s.errMsg = ""
 	s.mu.Unlock()
 	s.log("Stream stopped")
 	return nil
@@ -307,6 +324,32 @@ func (s *Server) LogEntries() []LogEntry {
 	entries := make([]LogEntry, len(s.logEntries))
 	copy(entries, s.logEntries)
 	return entries
+}
+
+// failStream is called when FFmpeg exits unexpectedly during streaming.
+// It sets the error state and cleans up all server resources so that
+// the user can start a new stream without restarting the app.
+func (s *Server) failStream(msg string) {
+	s.log(msg)
+	s.mu.Lock()
+	s.status = "error"
+	s.errMsg = msg
+	tun := s.tun
+	s.tun = nil
+	s.mu.Unlock()
+
+	// Cancel server context (stops audio capturer, janitor)
+	if s.srvCancel != nil {
+		s.srvCancel()
+	}
+	// Stop tunnel process
+	if tun != nil {
+		tun.Stop()
+	}
+	// Shut down HTTP server to free the port
+	if s.httpSrv != nil {
+		s.httpSrv.Shutdown(context.Background())
+	}
 }
 
 func (s *Server) setError(msg string) {

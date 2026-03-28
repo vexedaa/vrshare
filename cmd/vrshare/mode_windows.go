@@ -4,6 +4,7 @@ package main
 
 import (
 	"log"
+	"os"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -11,22 +12,19 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
 	"github.com/vexedaa/vrshare/frontend"
 	"github.com/vexedaa/vrshare/internal/gui"
 )
 
 var (
-	kernel32              = syscall.NewLazyDLL("kernel32.dll")
-	procGetConsoleWindow  = kernel32.NewProc("GetConsoleWindow")
-	procFreeConsole       = kernel32.NewProc("FreeConsole")
-	procCreateToolhelp32  = kernel32.NewProc("CreateToolhelp32Snapshot")
-	procProcess32First    = kernel32.NewProc("Process32FirstW")
-	procProcess32Next     = kernel32.NewProc("Process32NextW")
+	kernel32                = syscall.NewLazyDLL("kernel32.dll")
+	procAttachConsole       = kernel32.NewProc("AttachConsole")
+	procCreateToolhelp32    = kernel32.NewProc("CreateToolhelp32Snapshot")
+	procProcess32First      = kernel32.NewProc("Process32FirstW")
+	procProcess32Next       = kernel32.NewProc("Process32NextW")
 	procGetCurrentProcessId = kernel32.NewProc("GetCurrentProcessId")
-
-	user32win             = syscall.NewLazyDLL("user32.dll")
-	procShowWindow        = user32win.NewProc("ShowWindow")
 )
 
 type processEntry32 struct {
@@ -99,19 +97,22 @@ func getParentProcessName() string {
 	return ""
 }
 
-// hideAndDetachConsole hides the console window and detaches from it.
-func hideAndDetachConsole() {
-	hwnd, _, _ := procGetConsoleWindow.Call()
-	if hwnd != 0 {
-		const SW_HIDE = 0
-		procShowWindow.Call(hwnd, SW_HIDE)
+// attachParentConsole attaches to the parent process's console so that
+// CLI output works when the binary is built with -H=windowsgui.
+func attachParentConsole() {
+	const ATTACH_PARENT_PROCESS = ^uint32(0) // (DWORD)-1
+	r, _, _ := procAttachConsole.Call(uintptr(ATTACH_PARENT_PROCESS))
+	if r == 0 {
+		return
 	}
-	procFreeConsole.Call()
+	out, err := os.OpenFile("CONOUT$", os.O_WRONLY, 0)
+	if err == nil {
+		os.Stdout = out
+		os.Stderr = out
+	}
 }
 
 func launchGUI() {
-	hideAndDetachConsole()
-
 	app := gui.NewApp()
 
 	err := wails.Run(&options.App{
@@ -128,6 +129,18 @@ func launchGUI() {
 		OnBeforeClose: app.BeforeClose,
 		Bind: []interface{}{
 			app,
+		},
+		Windows: &windows.Options{
+			Messages: &windows.Messages{
+				InstallationRequired: "VRShare requires the WebView2 runtime.",
+				Webview2NotInstalled: "WebView2 is not installed on your system.\nVRShare needs it to display its interface.\n\nClick OK to download and install it automatically.",
+				MissingRequirements:  "VRShare is missing a required component.",
+				Error:                "An error occurred while starting VRShare",
+				FailedToInstall:      "WebView2 installation failed.\nPlease install it manually from:\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/",
+				DownloadPage:         "https://developer.microsoft.com/en-us/microsoft-edge/webview2/",
+				PressOKToInstall:     "Press OK to install the WebView2 runtime, or Cancel to exit.",
+				ContactAdmin:         "If the problem persists, please open an issue at https://github.com/vexedaa/vrshare/issues",
+			},
 		},
 	})
 	if err != nil {

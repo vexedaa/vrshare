@@ -10,7 +10,7 @@ import (
 
 type audioCapturer struct{}
 
-func newAudioCapturer(_ io.Writer) *audioCapturer {
+func newAudioCapturer(_ context.Context, _ io.WriteCloser) *audioCapturer {
 	return &audioCapturer{}
 }
 

@@ -18,7 +18,8 @@ Pop-Location
 
 # Build Go binary
 Write-Host "  Building binary..." -ForegroundColor Gray
-go build -tags desktop,production -ldflags "-s -w" -o vrshare.exe ./cmd/vrshare/
+$env:CGO_ENABLED = "0"
+go build -tags desktop,production -ldflags "-s -w -H=windowsgui" -o vrshare.exe ./cmd/vrshare/
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Go build failed." -ForegroundColor Red
     exit 1

@@ -75,7 +75,7 @@ func (c *Capturer) captureLoop(ctx context.Context) {
 		log.Printf("Audio: RoInitialize failed: 0x%x, trying CoInitializeEx", hr)
 		hr, _, _ = procCoInitializeEx.Call(0, coINIT_MULTITHREADED)
 		if hr != 0 && hr != 1 {
-			log.Printf("Audio: CoInitializeEx failed: 0x%x", hr)
+			log.Printf("Audio: COM initialization failed (0x%x) — audio capture disabled", hr)
 			return
 		}
 		defer procCoUninitialize.Call()
@@ -98,7 +98,10 @@ func (c *Capturer) captureLoop(ctx context.Context) {
 		if err != nil {
 			log.Printf("Audio: WASAPI activation failed: %v — retrying in 1s", err)
 			// Write silence while we retry to keep FFmpeg's audio stream continuous
-			c.writeSilence(1 * time.Second)
+			if wErr := c.writeSilence(1 * time.Second); wErr != nil {
+				log.Printf("Audio: write error: %v — stopping capture", wErr)
+				return
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -122,17 +125,20 @@ func (c *Capturer) captureLoop(ctx context.Context) {
 		}
 
 		if err != nil {
-			log.Printf("Audio: capture session ended: %v — restarting", err)
+			log.Printf("Audio: capture session ended: %v", err)
 		}
 
 		// Write silence during the gap to keep audio continuous
-		c.writeSilence(100 * time.Millisecond)
+		if wErr := c.writeSilence(100 * time.Millisecond); wErr != nil {
+			log.Printf("Audio: write error: %v — stopping capture", wErr)
+			return
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
 // writeSilence writes zero PCM data for the given duration to keep FFmpeg fed.
-func (c *Capturer) writeSilence(d time.Duration) {
+func (c *Capturer) writeSilence(d time.Duration) error {
 	frames := int(d.Seconds() * sampleRate)
 	remaining := frames * bytesPerFrame
 	for remaining > 0 {
@@ -140,9 +146,12 @@ func (c *Capturer) writeSilence(d time.Duration) {
 		if n > remaining {
 			n = remaining
 		}
-		c.writer.Write(c.silenceBuf[:n])
+		if _, err := c.writer.Write(c.silenceBuf[:n]); err != nil {
+			return err
+		}
 		remaining -= n
 	}
+	return nil
 }
 
 func (c *Capturer) activateLoopback(excludePID uint32) (uintptr, error) {
@@ -249,12 +258,14 @@ func (c *Capturer) runCaptureSession(ctx context.Context, audioClient uintptr) e
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			c.readBuffers(captureClient)
+			if err := c.readBuffers(captureClient); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-func (c *Capturer) readBuffers(captureClient uintptr) {
+func (c *Capturer) readBuffers(captureClient uintptr) error {
 	for {
 		var data uintptr
 		var numFrames uint32
@@ -272,6 +283,7 @@ func (c *Capturer) readBuffers(captureClient uintptr) {
 		}
 
 		byteCount := int(numFrames) * bytesPerFrame
+		var writeErr error
 
 		if flags&AUDCLNT_BUFFERFLAGS_SILENT != 0 {
 			// Buffer is silent — write zeroes instead of potentially garbage data
@@ -281,16 +293,24 @@ func (c *Capturer) readBuffers(captureClient uintptr) {
 				if n > remaining {
 					n = remaining
 				}
-				c.writer.Write(c.silenceBuf[:n])
+				if _, err := c.writer.Write(c.silenceBuf[:n]); err != nil {
+					writeErr = err
+					break
+				}
 				remaining -= n
 			}
 		} else if data != 0 && byteCount > 0 {
 			buf := unsafe.Slice((*byte)(unsafe.Pointer(data)), byteCount)
-			c.writer.Write(buf)
+			_, writeErr = c.writer.Write(buf)
 		}
 
 		comCall(captureClient, 4, uintptr(numFrames)) // ReleaseBuffer
+
+		if writeErr != nil {
+			return writeErr
+		}
 	}
+	return nil
 }
 
 func (c *Capturer) monitorVRChat(ctx context.Context) {

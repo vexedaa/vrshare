@@ -21,7 +21,9 @@ func main() {
 		return
 	}
 
-	// CLI mode
+	// CLI mode — attach to parent console (needed for -H=windowsgui builds)
+	attachParentConsole()
+
 	cfg := config.Default()
 
 	flag.IntVar(&cfg.Port, "port", cfg.Port, "HTTP server port")
