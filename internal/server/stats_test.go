@@ -78,6 +78,55 @@ func TestStatsParserCarriageReturn(t *testing.T) {
 	}
 }
 
+// TestStatsParserOnFirstFrame verifies that OnFirstFrame fires exactly once
+// on the first progress line, never on subsequent lines or non-progress lines.
+func TestStatsParserOnFirstFrame(t *testing.T) {
+	p := NewStatsParser(nil)
+	calls := 0
+	p.OnFirstFrame = func() { calls++ }
+
+	// Non-progress line — should not fire.
+	p.Write([]byte("Press [q] to stop, [?] for help\n"))
+	if calls != 0 {
+		t.Fatalf("OnFirstFrame called %d times after non-progress line; want 0", calls)
+	}
+
+	// First progress line — should fire once.
+	firstFrame := "frame=    1 fps= 30.0 q=28.0 size=       0kB time=00:00:00.03 bitrate=   0.0kbits/s speed=0.98x\n"
+	p.Write([]byte(firstFrame))
+	if calls != 1 {
+		t.Fatalf("OnFirstFrame called %d times after first frame; want 1", calls)
+	}
+
+	// Second progress line — should NOT fire again.
+	secondFrame := "frame=   30 fps= 30.0 q=28.0 size=     384kB time=00:00:01.00 bitrate=3071.0kbits/s speed=1.00x\n"
+	p.Write([]byte(secondFrame))
+	if calls != 1 {
+		t.Fatalf("OnFirstFrame called %d times after second frame; want 1 (idempotent)", calls)
+	}
+}
+
+// TestStatsParserOnFirstFrameKeyValue verifies OnFirstFrame fires via the
+// key=value (-progress pipe:2) parsing path as well.
+func TestStatsParserOnFirstFrameKeyValue(t *testing.T) {
+	p := NewStatsParser(nil)
+	calls := 0
+	p.OnFirstFrame = func() { calls++ }
+
+	// Simulate one key=value progress block.
+	block := "fps=30.0\nbitrate=1234kbits/s\nspeed=1.00x\nprogress=continue\n"
+	p.Write([]byte(block))
+	if calls != 1 {
+		t.Fatalf("OnFirstFrame called %d times after key=value block; want 1", calls)
+	}
+
+	// Second block — should not fire again.
+	p.Write([]byte(block))
+	if calls != 1 {
+		t.Fatalf("OnFirstFrame called %d times after second block; want 1 (idempotent)", calls)
+	}
+}
+
 type sliceWriter struct{ buf *[]byte }
 
 func (w *sliceWriter) Write(p []byte) (int, error) {

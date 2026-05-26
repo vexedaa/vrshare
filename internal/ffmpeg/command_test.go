@@ -11,6 +11,8 @@ func TestBuildArgs_Defaults(t *testing.T) {
 	cfg := config.Default()
 	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
 
+	// Stats period must be present so OnFirstFrame fires quickly (~50ms)
+	assertContains(t, args, "-stats_period", "0.05")
 	assertContains(t, args, "-f", "gdigrab")
 	assertContains(t, args, "-framerate", "30")
 	assertContains(t, args, "-i", "desktop")
@@ -22,6 +24,28 @@ func TestBuildArgs_Defaults(t *testing.T) {
 	assertContains(t, args, "-hls_list_size", "2")
 	assertContains(t, args, "-hls_flags", "append_list+delete_segments")
 	assertContains(t, args, "-vf", "format=yuv420p")
+}
+
+// TestBuildArgs_StatsPeriod verifies that -stats_period 0.05 is present in
+// every BuildArgs call so that StatsParser.OnFirstFrame fires within ~50ms of
+// the first encoded frame, keeping A/V startup offset imperceptible.
+func TestBuildArgs_StatsPeriod(t *testing.T) {
+	cases := []struct {
+		name       string
+		encoder    string
+		useDDAgrab bool
+	}{
+		{"cpu+gdigrab", "cpu", false},
+		{"nvenc+ddagrab", "nvenc", true},
+		{"cpu+ddagrab", "cpu", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			args := BuildArgs(cfg, tc.encoder, "/tmp/vrshare", tc.useDDAgrab)
+			assertContains(t, args, "-stats_period", "0.05")
+		})
+	}
 }
 
 func TestBuildArgs_CustomFPSAndBitrate(t *testing.T) {

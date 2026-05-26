@@ -16,6 +16,12 @@ func isGPUEncoder(encoder string) bool {
 func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, useDDAgrab bool) []string {
 	args := []string{}
 
+	// Reduce stats reporting period from FFmpeg's 500ms default to 50ms.
+	// This makes StatsParser.OnFirstFrame fire within ~50ms of the first
+	// encoded frame instead of ~500ms, keeping the A/V startup offset
+	// imperceptible (<2 frames at 30fps rather than ~15 frames).
+	args = append(args, "-stats_period", "0.05")
+
 	useDD := useDDAgrab && runtime.GOOS == "windows"
 
 	if useDD {
