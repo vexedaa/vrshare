@@ -113,11 +113,16 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 	gop := fmt.Sprintf("%d", cfg.FPS)
 	args = append(args, "-g", gop, "-keyint_min", gop)
 
+	// hls_list_size of 6 gives viewers ~6 seconds to fetch a segment before it
+	// rolls off the playlist. hls_delete_threshold keeps 3 extra rolled-off
+	// segments on disk as a buffer for slow clients (tunnel latency, VRChat's
+	// slow polling cadence). Together: ~9 seconds of segment availability.
 	args = append(args,
 		"-f", "hls",
 		"-hls_time", "1",
-		"-hls_list_size", "2",
+		"-hls_list_size", "6",
 		"-hls_flags", "append_list+delete_segments",
+		"-hls_delete_threshold", "3",
 		"-hls_segment_filename", filepath.Join(segmentDir, "segment_%d.ts"),
 		filepath.Join(segmentDir, "stream.m3u8"),
 	)

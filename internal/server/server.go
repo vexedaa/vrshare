@@ -133,7 +133,12 @@ func (s *Server) Start(ctx context.Context) error {
 	// Server-level context for long-lived services
 	s.srvCtx, s.srvCancel = context.WithCancel(ctx)
 
-	go hls.RunJanitor(s.srvCtx, segDir, s.hlsSrv, 2*time.Second)
+	// Janitor sweeps every 2s but only deletes segments older than 30s.
+	// FFmpeg's delete_segments + hls_delete_threshold handles the normal
+	// rolling cleanup; the janitor is just a safety net for stragglers.
+	// Without an age gate, the janitor races viewers and deletes segments
+	// while they are still being fetched.
+	go hls.RunJanitor(s.srvCtx, segDir, s.hlsSrv, 2*time.Second, 30*time.Second)
 
 	// Create audio pipe if enabled (FFmpeg needs the read-end at startup)
 	var ac *audioCapturer

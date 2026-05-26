@@ -10,9 +10,16 @@ import (
 	"time"
 )
 
-// CleanOldSegments removes .ts files that are not in the playlist and not
-// actively being downloaded by any viewer.
-func CleanOldSegments(dir string, srv *Server) (int, error) {
+// CleanOldSegments removes .ts/.m4s files that are not in the playlist, not
+// actively being downloaded, and older than minAge. The minAge gate is a
+// safety net against viewers that pull the playlist and then take a moment to
+// fetch the segments listed in it: without it, the janitor would race
+// FFmpeg's own delete_segments + hls_delete_threshold buffer and silently
+// delete segments while viewers were still downloading them.
+//
+// Pass minAge = 0 to skip the age check (for tests or when callers manage
+// timing themselves).
+func CleanOldSegments(dir string, srv *Server, minAge time.Duration) (int, error) {
 	playlistPath := filepath.Join(dir, "stream.m3u8")
 
 	referenced, err := parsePlaylistSegments(playlistPath)
@@ -32,6 +39,7 @@ func CleanOldSegments(dir string, srv *Server) (int, error) {
 		return 0, err
 	}
 
+	cutoff := time.Now().Add(-minAge)
 	removed := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -46,6 +54,12 @@ func CleanOldSegments(dir string, srv *Server) (int, error) {
 		}
 		if srv != nil && srv.IsSegmentActive(entry.Name()) {
 			continue
+		}
+		if minAge > 0 {
+			info, err := entry.Info()
+			if err != nil || info.ModTime().After(cutoff) {
+				continue
+			}
 		}
 		if err := os.Remove(filepath.Join(dir, entry.Name())); err == nil {
 			removed++
@@ -91,8 +105,10 @@ func parsePlaylistSegments(path string) (map[string]bool, error) {
 	return segments, scanner.Err()
 }
 
-// RunJanitor periodically cleans old segments until the context is cancelled.
-func RunJanitor(ctx context.Context, dir string, srv *Server, interval time.Duration) {
+// RunJanitor periodically cleans segments older than minAge until the context
+// is cancelled. Segments referenced by the playlist or actively being
+// downloaded are always preserved regardless of age.
+func RunJanitor(ctx context.Context, dir string, srv *Server, interval, minAge time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -101,7 +117,7 @@ func RunJanitor(ctx context.Context, dir string, srv *Server, interval time.Dura
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			removed, err := CleanOldSegments(dir, srv)
+			removed, err := CleanOldSegments(dir, srv, minAge)
 			if err != nil {
 				log.Printf("janitor error: %v", err)
 			} else if removed > 0 {

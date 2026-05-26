@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestCleanOldSegments_RemovesOldFiles(t *testing.T) {
@@ -21,7 +22,7 @@ func TestCleanOldSegments_RemovesOldFiles(t *testing.T) {
 		"#EXTINF:1.0,\nsegment_5.ts\n"
 	os.WriteFile(filepath.Join(dir, "stream.m3u8"), []byte(playlist), 0644)
 
-	removed, err := CleanOldSegments(dir, nil)
+	removed, err := CleanOldSegments(dir, nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestCleanOldSegments_NoPlaylist(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "segment_0.ts"), []byte("data"), 0644)
 
-	removed, err := CleanOldSegments(dir, nil)
+	removed, err := CleanOldSegments(dir, nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestCleanOldSegments_NoPlaylist(t *testing.T) {
 
 func TestCleanOldSegments_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	removed, err := CleanOldSegments(dir, nil)
+	removed, err := CleanOldSegments(dir, nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestCleanOldSegments_RemovesFMP4Files(t *testing.T) {
 		"#EXTINF:0.5,\nsegment_5.m4s\n"
 	os.WriteFile(filepath.Join(dir, "stream.m3u8"), []byte(playlist), 0644)
 
-	removed, err := CleanOldSegments(dir, nil)
+	removed, err := CleanOldSegments(dir, nil, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +129,7 @@ func TestCleanOldSegments_SkipsActiveSegments(t *testing.T) {
 	srv := NewServer(dir)
 	srv.trackStart("segment_1.ts")
 
-	removed, err := CleanOldSegments(dir, srv)
+	removed, err := CleanOldSegments(dir, srv, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,11 +146,46 @@ func TestCleanOldSegments_SkipsActiveSegments(t *testing.T) {
 
 	// After ending the download, it should be cleaned up
 	srv.trackEnd("segment_1.ts")
-	removed, err = CleanOldSegments(dir, srv)
+	removed, err = CleanOldSegments(dir, srv, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if removed != 1 {
 		t.Errorf("expected 1 removed after download ended, got %d", removed)
+	}
+}
+
+func TestCleanOldSegments_RespectsMinAge(t *testing.T) {
+	dir := t.TempDir()
+
+	// Two segments not in the playlist: one old, one freshly written.
+	oldSeg := filepath.Join(dir, "segment_0.ts")
+	newSeg := filepath.Join(dir, "segment_1.ts")
+	os.WriteFile(oldSeg, []byte("data"), 0644)
+	os.WriteFile(newSeg, []byte("data"), 0644)
+	// Backdate the old one by 1 minute.
+	past := time.Now().Add(-1 * time.Minute)
+	if err := os.Chtimes(oldSeg, past, past); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	// Playlist references neither segment, but the minAge gate must keep
+	// the fresh one alive (it could still be downloading even though no
+	// active read is registered yet).
+	playlist := "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1.0,\nsegment_99.ts\n"
+	os.WriteFile(filepath.Join(dir, "stream.m3u8"), []byte(playlist), 0644)
+
+	removed, err := CleanOldSegments(dir, nil, 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("expected 1 removed (old only), got %d", removed)
+	}
+	if _, err := os.Stat(oldSeg); !os.IsNotExist(err) {
+		t.Error("segment_0.ts (old) should have been removed")
+	}
+	if _, err := os.Stat(newSeg); err != nil {
+		t.Error("segment_1.ts (new) should still exist")
 	}
 }
