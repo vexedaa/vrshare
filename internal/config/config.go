@@ -35,7 +35,7 @@ func Default() Config {
 		FPS:       30,
 		Bitrate:   4000,
 		Encoder:   EncoderAuto,
-		Audio:     false,
+		Audio:     true,
 		AudioGain: 6,
 		Tunnel:    "",
 	}
