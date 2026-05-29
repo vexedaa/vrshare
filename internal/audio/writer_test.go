@@ -37,83 +37,37 @@ func (w *writeCloser) Bytes() []byte {
 	return b
 }
 
-// TestAsyncWriterDropsBeforeReady verifies that Write calls are silently
-// dropped before SignalReady, and that no data reaches the underlying writer.
-func TestAsyncWriterDropsBeforeReady(t *testing.T) {
+// TestAsyncWriterForwardsImmediately verifies that audio reaches the underlying
+// writer without any priming signal. FFmpeg stalls its entire pipeline — it
+// emits no encoded frames at all — when its mapped pipe:0 audio input is
+// starved, so audio MUST flow from the very first write or the stream
+// deadlocks. (Regression guard for the first-frame audio gate.)
+func TestAsyncWriterForwardsImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	dst := &writeCloser{}
 	aw := NewAsyncWriter(ctx, dst, 64)
 
-	stale := []byte("stale-audio")
-	for i := 0; i < 5; i++ {
-		n, err := aw.Write(stale)
-		if n != len(stale) || err != nil {
-			t.Fatalf("Write before ready: n=%d err=%v; want n=%d err=nil", n, err, len(stale))
-		}
-	}
-
-	// Give the drain goroutine time to process — it should have nothing to do.
-	time.Sleep(50 * time.Millisecond)
-
-	if got := dst.Bytes(); len(got) != 0 {
-		t.Fatalf("data reached writer before SignalReady: %q", got)
-	}
-}
-
-// TestAsyncWriterDeliversAfterReady verifies that writes after SignalReady
-// are forwarded to the underlying writer.
-func TestAsyncWriterDeliversAfterReady(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dst := &writeCloser{}
-	aw := NewAsyncWriter(ctx, dst, 64)
-
-	// Pre-signal writes — must be dropped.
-	aw.Write([]byte("stale"))
-
-	aw.SignalReady()
-
-	fresh := []byte("fresh-audio-data")
-	aw.Write(fresh)
+	want := []byte("audio-from-the-start")
+	aw.Write(want)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if bytes.Contains(dst.Bytes(), fresh) {
+		if bytes.Contains(dst.Bytes(), want) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	got := dst.Bytes()
-	if !bytes.Contains(got, fresh) {
-		t.Fatalf("fresh audio not delivered after SignalReady; got %q", got)
-	}
-	if bytes.Contains(got, []byte("stale")) {
-		t.Fatalf("stale audio reached the writer — it should have been dropped")
+	if got := dst.Bytes(); !bytes.Contains(got, want) {
+		t.Fatalf("audio not forwarded without a priming signal; got %q", got)
 	}
 }
 
-// TestAsyncWriterSignalReadyIdempotent verifies that multiple SignalReady
-// calls do not panic.
-func TestAsyncWriterSignalReadyIdempotent(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dst := &writeCloser{}
-	aw := NewAsyncWriter(ctx, dst, 64)
-
-	aw.SignalReady()
-	aw.SignalReady()
-	aw.SignalReady()
-}
-
-// TestAsyncWriterContextCancelWithoutSignal verifies that cancelling the
-// context without ever calling SignalReady does not deadlock and closes the
-// underlying writer.
-func TestAsyncWriterContextCancelWithoutSignal(t *testing.T) {
+// TestAsyncWriterContextCancel verifies that cancelling the context does not
+// deadlock and closes the underlying writer.
+func TestAsyncWriterContextCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
@@ -139,15 +93,14 @@ func TestAsyncWriterContextCancelWithoutSignal(t *testing.T) {
 	}
 }
 
-// TestAsyncWriterWriteAfterSignal verifies normal pass-through once ready,
+// TestAsyncWriterPassthrough verifies normal pass-through to a blocking writer,
 // using an io.Pipe so reads block until data arrives.
-func TestAsyncWriterWriteAfterSignal(t *testing.T) {
+func TestAsyncWriterPassthrough(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	pr, pw := io.Pipe()
 	aw := NewAsyncWriter(ctx, pw, 32)
-	aw.SignalReady()
 
 	want := []byte("hello-audio")
 	aw.Write(want)
@@ -172,6 +125,6 @@ func TestAsyncWriterWriteAfterSignal(t *testing.T) {
 			t.Fatalf("got %q; want %q", r.data, want)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for audio data after SignalReady")
+		t.Fatal("timeout waiting for audio data")
 	}
 }

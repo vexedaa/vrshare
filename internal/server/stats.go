@@ -21,15 +21,13 @@ type EncodingStats struct {
 // If inner is nil, output is discarded after parsing.
 // Non-progress lines (errors, warnings) are forwarded to LogFunc if set.
 type StatsParser struct {
-	inner        io.Writer
-	LogFunc      func(string) // called with non-progress stderr lines
-	OnFirstFrame func()       // called once when the first encoded frame is detected
-	mu           sync.Mutex
-	latest       EncodingStats
-	buf          []byte
+	inner   io.Writer
+	LogFunc func(string) // called with non-progress stderr lines
+	mu      sync.Mutex
+	latest  EncodingStats
+	buf     []byte
 	// Accumulate key=value pairs between "progress=" lines
-	pending    EncodingStats
-	firstFrame bool // guards OnFirstFrame so it fires exactly once
+	pending EncodingStats
 }
 
 func NewStatsParser(inner io.Writer) *StatsParser {
@@ -61,7 +59,6 @@ func (p *StatsParser) Write(data []byte) (int, error) {
 			p.mu.Lock()
 			p.latest = stats
 			p.mu.Unlock()
-			p.notifyFirstFrame()
 		} else if p.LogFunc != nil && line != "" {
 			// Non-progress line (error, warning, info from FFmpeg)
 			p.LogFunc(line)
@@ -101,7 +98,6 @@ func (p *StatsParser) parseProgressLine(line string) {
 			p.mu.Lock()
 			p.latest = p.pending
 			p.mu.Unlock()
-			p.notifyFirstFrame()
 		}
 		p.pending = EncodingStats{}
 	}
@@ -111,23 +107,6 @@ func (p *StatsParser) Latest() EncodingStats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.latest
-}
-
-// notifyFirstFrame calls OnFirstFrame exactly once, the first time a frame is
-// detected in FFmpeg's output. Must be called without p.mu held.
-func (p *StatsParser) notifyFirstFrame() {
-	p.mu.Lock()
-	if p.firstFrame {
-		p.mu.Unlock()
-		return
-	}
-	p.firstFrame = true
-	cb := p.OnFirstFrame
-	p.mu.Unlock()
-
-	if cb != nil {
-		cb()
-	}
 }
 
 var (

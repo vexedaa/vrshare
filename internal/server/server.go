@@ -170,23 +170,17 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start the audio capturer before FFmpeg so WASAPI is ready immediately,
-	// but gate audio delivery on FFmpeg's first encoded frame (see signalReady).
-	// This prevents the startup A/V sync offset that occurs when WASAPI
-	// initialises faster than the FFmpeg process: any audio buffered before
-	// FFmpeg's first frame is discarded so audio PTS=0 aligns with video PTS=0.
+	// Start the audio capturer right before FFmpeg. Audio must reach FFmpeg
+	// continuously from startup: FFmpeg stalls its entire pipeline — encoding
+	// no frames and writing no HLS segments — for as long as its mapped pipe:0
+	// audio input is starved. The AsyncWriter therefore forwards every chunk
+	// immediately (no first-frame gating, which would deadlock: no audio -> no
+	// frame -> no signal -> no audio).
 	if ac != nil {
 		go ac.start(s.srvCtx)
 	}
 
-	// onFirstFrame is called by StatsParser the moment FFmpeg confirms it has
-	// encoded its first frame. At that point we signal the audio drain so it
-	// discards pre-buffered stale audio and begins delivering fresh PCM.
-	var onFirstFrame func()
-	if ac != nil {
-		onFirstFrame = ac.signalReady
-	}
-	if err := s.startFFmpeg(onFirstFrame); err != nil {
+	if err := s.startFFmpeg(); err != nil {
 		s.srvCancel()
 		s.httpSrv.Shutdown(context.Background())
 		return err
@@ -204,18 +198,12 @@ func (s *Server) Start(ctx context.Context) error {
 // startFFmpeg launches the FFmpeg process with current config.
 // If FFmpeg crashes repeatedly, it falls back to safer settings
 // (CPU encoder, gdigrab) before giving up entirely.
-//
-// onFirstFrame, if non-nil, is called once when FFmpeg emits its first
-// progress line (confirming the first encoded frame). Pass ac.signalReady
-// so the audio drain discards pre-buffered audio and starts fresh, keeping
-// audio PTS=0 in sync with video PTS=0.
-func (s *Server) startFFmpeg(onFirstFrame func()) error {
+func (s *Server) startFFmpeg() error {
 	encoder := s.encoder
 	useDDAgrab := s.useDDAgrab
 
 	s.stats = NewStatsParser(os.Stderr)
 	s.stats.LogFunc = func(line string) { s.log("FFmpeg: " + line) }
-	s.stats.OnFirstFrame = onFirstFrame // may be nil (restart path)
 
 	ffCtx, ffCancel := context.WithCancel(s.srvCtx)
 	s.ffmpegCancel = ffCancel
@@ -293,10 +281,9 @@ func (s *Server) RestartCapture() error {
 	probe := ffmpeg.ProbeFFmpegEncoder(s.ffmpegPath)
 	s.encoder = ffmpeg.ResolveEncoder(string(s.cfg.Encoder), probe)
 
-	// Relaunch FFmpeg. No first-frame callback needed here: the AsyncWriter
-	// drain is already running from the initial Start (SignalReady was already
-	// called), so no re-gating is required.
-	if err := s.startFFmpeg(nil); err != nil {
+	// Relaunch FFmpeg. The AsyncWriter forwards audio unconditionally, so the
+	// new process begins receiving PCM as soon as it opens the pipe.
+	if err := s.startFFmpeg(); err != nil {
 		s.setError("Failed to restart capture: " + err.Error())
 		return err
 	}
