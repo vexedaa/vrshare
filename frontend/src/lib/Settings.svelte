@@ -1,5 +1,5 @@
 <script>
-  import { onMount, createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { GetConfig, SaveConfig, GetSettings, SaveSettings, DetectSystem,
            ListPresets, SavePreset, DeletePreset, GetState, RestartStream,
            GetTunnelProviders, AuthorizeTunnel } from '../../wailsjs/go/gui/App';
@@ -17,6 +17,8 @@
   let authMessage = '';
   let authUrl = '';
   let authPendingProvider = '';
+  let authPolling = false;
+  let authPollTimer = null;
 
   onMount(async () => {
     config = await GetConfig();
@@ -61,12 +63,16 @@
   async function authorize(provider) {
     authMessage = '';
     authUrl = '';
+    stopAuthPolling();
     authPendingProvider = provider;
     try {
       const msg = await AuthorizeTunnel(provider);
       if (msg && msg.startsWith('http')) {
         authUrl = msg;
-        authMessage = 'Open this link to finish signing in, then click Refresh:';
+        authMessage = 'Open this link to finish signing in — this updates automatically once you do.';
+        // Auth completes asynchronously in the browser; poll until the provider
+        // reports authorized so the user never has to hit Refresh themselves.
+        startAuthPolling(provider);
       } else {
         authMessage = msg;
       }
@@ -78,9 +84,51 @@
     }
   }
 
+  // startAuthPolling re-checks provider status until the given provider becomes
+  // authorized (then announces success) or a few minutes pass. Uses a
+  // self-rescheduling timeout so slow status checks never overlap.
+  function startAuthPolling(provider) {
+    stopAuthPolling();
+    authPolling = true;
+    const deadline = Date.now() + 3 * 60 * 1000;
+    const tick = async () => {
+      if (!authPolling) return;
+      try {
+        const list = (await GetTunnelProviders()) || [];
+        tunnelProviders = list;
+        const p = list.find((x) => x.name === provider);
+        if (p && p.authorized) {
+          authMessage = `${p.label} signed in successfully.`;
+          authUrl = '';
+          stopAuthPolling();
+          return;
+        }
+      } catch (err) {
+        // transient; keep polling
+      }
+      if (!authPolling) return;
+      if (Date.now() > deadline) {
+        stopAuthPolling();
+        return;
+      }
+      authPollTimer = setTimeout(tick, 2500);
+    };
+    authPollTimer = setTimeout(tick, 2500);
+  }
+
+  function stopAuthPolling() {
+    authPolling = false;
+    if (authPollTimer) {
+      clearTimeout(authPollTimer);
+      authPollTimer = null;
+    }
+  }
+
   async function refreshProviders() {
     tunnelProviders = (await GetTunnelProviders()) || [];
   }
+
+  onDestroy(stopAuthPolling);
 
   async function removePreset(name) {
     try {
