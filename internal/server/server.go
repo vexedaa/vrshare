@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,13 @@ import (
 	"github.com/vexedaa/vrshare/internal/hls"
 	"github.com/vexedaa/vrshare/internal/tunnel"
 )
+
+// maxLogEntries caps the in-memory event-log buffer. The full session history
+// is always written to the session log file; this buffer is only the live tail
+// shown in the UI. Without a cap it grew unbounded (~2 lines/sec from FFmpeg's
+// per-segment logging) and was copied and emitted to the frontend every second,
+// turning into a steadily rising CPU and memory cost over a long session.
+const maxLogEntries = 500
 
 // Server orchestrates the streaming pipeline: FFmpeg, HLS, audio, and tunnel.
 type Server struct {
@@ -44,6 +52,7 @@ type Server struct {
 	segDir     string
 	audioPipe  *os.File
 	logEntries []LogEntry
+	logSeq     uint64 // monotonic count of log lines ever emitted (for change detection)
 	logMu      sync.Mutex
 	logFile    *os.File
 }
@@ -106,6 +115,14 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 	s.segDir = segDir
+
+	// Sweep segment dirs left behind by sessions that crashed or were killed
+	// before Stop() could remove their own dir. The age gate avoids deleting a
+	// dir that a concurrent instance is actively writing (it touches it every
+	// second), while still clearing genuine leftovers.
+	if n := cleanupStaleSegmentDirs(os.TempDir(), segDir, 10*time.Minute); n > 0 {
+		s.log(fmt.Sprintf("Cleaned %d stale segment dir(s)", n))
+	}
 
 	// Start HLS server — bind the port first so we fail fast if it's in use
 	s.hlsSrv = hls.NewServer(segDir)
@@ -326,6 +343,11 @@ func (s *Server) Stop() error {
 	if s.httpSrv != nil {
 		s.httpSrv.Shutdown(context.Background())
 	}
+	// Remove this session's temp segment dir (FFmpeg has already exited above).
+	if s.segDir != "" {
+		os.RemoveAll(s.segDir)
+		s.segDir = ""
+	}
 
 	s.mu.Lock()
 	s.status = "idle"
@@ -415,6 +437,11 @@ func (s *Server) failStream(msg string) {
 	if s.httpSrv != nil {
 		s.httpSrv.Shutdown(context.Background())
 	}
+	// Remove this session's temp segment dir (FFmpeg has already exited above).
+	if s.segDir != "" {
+		os.RemoveAll(s.segDir)
+		s.segDir = ""
+	}
 	s.closeSessionLog()
 }
 
@@ -429,15 +456,58 @@ func (s *Server) setError(msg string) {
 func (s *Server) log(msg string) {
 	now := time.Now()
 	s.logMu.Lock()
+	s.logSeq++
 	s.logEntries = append(s.logEntries, LogEntry{
 		Time:    now,
 		Message: msg,
 	})
+	// Keep only the most recent maxLogEntries in memory. The full history is
+	// still written to the session log file below.
+	if len(s.logEntries) > maxLogEntries {
+		s.logEntries = s.logEntries[len(s.logEntries)-maxLogEntries:]
+	}
 	if s.logFile != nil {
 		fmt.Fprintf(s.logFile, "%s  %s\n", now.Format("15:04:05"), msg)
 	}
 	s.logMu.Unlock()
 	log.Println(msg)
+}
+
+// LogSeq returns the monotonic count of log lines emitted so far. The GUI uses
+// it to skip re-sending an unchanged log buffer to the frontend every tick.
+func (s *Server) LogSeq() uint64 {
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+	return s.logSeq
+}
+
+// cleanupStaleSegmentDirs removes leftover "vrshare-segments-*" directories in
+// tempDir whose contents have not been modified within maxAge, skipping the
+// keep path (the current session's dir). Returns the number removed.
+func cleanupStaleSegmentDirs(tempDir, keep string, maxAge time.Duration) int {
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		return 0
+	}
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "vrshare-segments-") {
+			continue
+		}
+		full := filepath.Join(tempDir, e.Name())
+		if full == keep {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if os.RemoveAll(full) == nil {
+			removed++
+		}
+	}
+	return removed
 }
 
 func (s *Server) openSessionLog() {

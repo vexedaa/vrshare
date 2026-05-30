@@ -232,14 +232,19 @@ func (a *App) startStatsTicker() {
 		var slowTicks int    // consecutive ticks where speed < 0.9
 		var recoveredTicks int // consecutive ticks where speed >= 0.95 after a lag
 		var lastRestart time.Time
+		var lastLogSeq uint64
 
 		for {
 			select {
 			case <-a.ticker.C:
 				state := a.srv.State()
 				runtime.EventsEmit(a.ctx, "stream:state", state)
-				entries := a.srv.LogEntries()
-				runtime.EventsEmit(a.ctx, "stream:log", entries)
+				// Only ship the log buffer when it actually changed, so an idle
+				// stream doesn't re-marshal and re-render the same lines every tick.
+				if seq := a.srv.LogSeq(); seq != lastLogSeq {
+					lastLogSeq = seq
+					runtime.EventsEmit(a.ctx, "stream:log", a.srv.LogEntries())
+				}
 
 				// Lag detection: restart FFmpeg when it recovers from sustained slowdown
 				if state.Status == "streaming" && state.Speed > 0 {
