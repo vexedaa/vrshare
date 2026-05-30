@@ -15,6 +15,8 @@
   let error = '';
   let saved = false;
   let authMessage = '';
+  let authUrl = '';
+  let authPendingProvider = '';
 
   onMount(async () => {
     config = await GetConfig();
@@ -58,13 +60,26 @@
 
   async function authorize(provider) {
     authMessage = '';
+    authUrl = '';
+    authPendingProvider = provider;
     try {
       const msg = await AuthorizeTunnel(provider);
-      authMessage = msg;
+      if (msg && msg.startsWith('http')) {
+        authUrl = msg;
+        authMessage = 'Open this link to finish signing in, then click Refresh:';
+      } else {
+        authMessage = msg;
+      }
       tunnelProviders = (await GetTunnelProviders()) || [];
     } catch (err) {
       authMessage = err.toString();
+    } finally {
+      authPendingProvider = '';
     }
+  }
+
+  async function refreshProviders() {
+    tunnelProviders = (await GetTunnelProviders()) || [];
   }
 
   async function removePreset(name) {
@@ -183,9 +198,18 @@
   </section>
 
   <section class="mb-6">
-    <h2 class="text-lg font-semibold mb-3 text-slate-300">Tunnel Providers</h2>
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-lg font-semibold text-slate-300">Tunnel Providers</h2>
+      <button on:click={refreshProviders} class="text-sky-400 hover:text-sky-300 text-xs">Refresh</button>
+    </div>
     {#if authMessage}
-      <div class="bg-slate-800 border border-slate-700 rounded-md p-3 mb-3 text-slate-300 text-sm">{authMessage}</div>
+      <div class="bg-slate-800 border border-slate-700 rounded-md p-3 mb-3 text-slate-300 text-sm">
+        <div>{authMessage}</div>
+        {#if authUrl}
+          <a href={authUrl} target="_blank" rel="noreferrer"
+            class="text-sky-400 hover:text-sky-300 break-all underline mt-1 inline-block">{authUrl}</a>
+        {/if}
+      </div>
     {/if}
     <div class="space-y-2">
       {#each tunnelProviders as provider}
@@ -200,9 +224,9 @@
             {#if !provider.installed}
               <span class="text-xs text-slate-500">Not installed</span>
             {:else if !provider.authorized}
-              <button on:click={() => authorize(provider.name)}
-                class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-3 py-1 rounded transition-colors">
-                Sign In
+              <button on:click={() => authorize(provider.name)} disabled={authPendingProvider !== ''}
+                class="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-xs px-3 py-1 rounded transition-colors">
+                {authPendingProvider === provider.name ? 'Signing in…' : 'Sign In'}
               </button>
             {:else}
               <span class="text-xs text-green-400">Ready</span>

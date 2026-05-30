@@ -81,6 +81,10 @@ export function AuthorizeTunnel(provider) {
   return window['go']['gui']['App']['AuthorizeTunnel'](provider);
 }
 
+export function RetryTunnel() {
+  return window['go']['gui']['App']['RetryTunnel']();
+}
+
 export function ListSessionLogs() {
   return window['go']['gui']['App']['ListSessionLogs']();
 }

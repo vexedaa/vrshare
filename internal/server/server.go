@@ -32,7 +32,9 @@ type Server struct {
 	status     string
 	startTime  time.Time
 	streamURL  string
+	localURL   string // local-network URL; the fallback when no tunnel is up
 	errMsg     string
+	tunnelErr  string // last tunnel failure, surfaced to the UI (empty = healthy)
 
 	// Server-level context (HLS, janitor, tunnel, audio)
 	srvCancel  context.CancelFunc
@@ -45,6 +47,7 @@ type Server struct {
 	hlsSrv     *hls.Server
 	httpSrv    *http.Server
 	tun        *tunnel.Tunnel
+	tunnelMu   sync.Mutex // serializes tunnel start/restart/stop (tunnel.Start blocks for seconds)
 	stats      *StatsParser
 	ffmpegPath string
 	useDDAgrab bool
@@ -143,9 +146,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// Build stream URL
 	ip := getOutboundIP()
 	s.mu.Lock()
-	s.streamURL = fmt.Sprintf("http://%s:%d/stream.m3u8", ip, s.cfg.Port)
+	s.localURL = fmt.Sprintf("http://%s:%d/stream.m3u8", ip, s.cfg.Port)
+	s.streamURL = s.localURL
+	s.tunnelErr = ""
 	s.mu.Unlock()
-	s.log("Stream URL: " + s.streamURL)
+	s.log("Stream URL: " + s.localURL)
 
 	// Server-level context for long-lived services
 	s.srvCtx, s.srvCancel = context.WithCancel(ctx)
@@ -172,20 +177,10 @@ func (s *Server) Start(ctx context.Context) error {
 		ac = newAudioCapturer(s.srvCtx, w)
 	}
 
-	// Start tunnel if configured
-	if s.cfg.Tunnel != "" {
-		s.log("Starting tunnel: " + s.cfg.Tunnel)
-		tun, err := tunnel.Start(s.srvCtx, s.cfg.Tunnel, s.cfg.Port)
-		if err != nil {
-			s.log("Tunnel warning: " + err.Error())
-		} else {
-			s.tun = tun
-			s.mu.Lock()
-			s.streamURL = tun.StreamURL()
-			s.mu.Unlock()
-			s.log("Tunnel URL: " + s.streamURL)
-		}
-	}
+	// Start the tunnel if configured. A failure here is non-fatal: the stream
+	// still works over the local network and the failure is surfaced (TunnelError)
+	// so the UI can offer a retry.
+	s.startTunnel()
 
 	// Start the audio capturer right before FFmpeg. Audio must reach FFmpeg
 	// continuously from startup: FFmpeg stalls its entire pipeline — encoding
@@ -309,6 +304,136 @@ func (s *Server) RestartCapture() error {
 	return nil
 }
 
+// startTunnel starts the configured tunnel (if any) and points streamURL at it.
+// Serialized by tunnelMu so Retry clicks and Stop can't race. tunnel.Start blocks
+// for seconds, so s.mu is taken only for the quick field swaps — never held across
+// the call (State() needs s.mu every second).
+func (s *Server) startTunnel() {
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
+	s.startTunnelLocked()
+}
+
+// startTunnelLocked is startTunnel's body; the caller must hold tunnelMu.
+func (s *Server) startTunnelLocked() {
+	provider := s.cfg.Tunnel
+	if provider == "" {
+		return
+	}
+
+	s.log("Starting tunnel: " + provider)
+	tun, err := tunnel.Start(s.srvCtx, provider, s.cfg.Port)
+	if err != nil {
+		s.setTunnelError(fmt.Sprintf("%s tunnel failed: %v", provider, err))
+		s.log("Tunnel error: " + err.Error())
+		return
+	}
+
+	// If the server was stopped while the tunnel was coming up, don't keep the
+	// freshly-started process — kill it now or we leak cloudflared/tailscale.
+	if s.srvCtx.Err() != nil {
+		tun.Stop()
+		return
+	}
+
+	s.mu.Lock()
+	s.tun = tun
+	s.streamURL = tun.StreamURL()
+	s.tunnelErr = ""
+	s.mu.Unlock()
+	s.log("Tunnel URL: " + tun.StreamURL())
+
+	// Detect the tunnel dying mid-stream so a dead URL becomes visible (and
+	// retryable) instead of silently failing.
+	go s.monitorTunnel(tun, s.srvCtx)
+}
+
+// RestartTunnel tears down any existing tunnel and starts a fresh one with the
+// current config. This is the recovery primitive: use it after signing into a
+// provider, switching providers, or when a tunnel has died — all without
+// dropping the stream. Returns an error describing the failure if the new
+// tunnel doesn't come up.
+func (s *Server) RestartTunnel() error {
+	s.mu.Lock()
+	streaming := s.status == "streaming"
+	provider := s.cfg.Tunnel
+	s.mu.Unlock()
+	if !streaming {
+		return fmt.Errorf("not streaming")
+	}
+	if provider == "" {
+		return fmt.Errorf("no tunnel provider selected")
+	}
+
+	s.tunnelMu.Lock()
+	defer s.tunnelMu.Unlock()
+
+	// Drop the old tunnel and revert to the local URL while reconnecting.
+	s.mu.Lock()
+	old := s.tun
+	s.tun = nil
+	s.streamURL = s.localURL
+	s.tunnelErr = ""
+	s.mu.Unlock()
+	if old != nil {
+		old.Stop()
+	}
+
+	s.startTunnelLocked()
+
+	s.mu.Lock()
+	tErr := s.tunnelErr
+	s.mu.Unlock()
+	if tErr != "" {
+		return fmt.Errorf("%s", tErr)
+	}
+	return nil
+}
+
+// setTunnelError records a tunnel failure and falls back to the local URL so
+// LAN viewers keep working. The UI surfaces TunnelError and offers a retry.
+func (s *Server) setTunnelError(msg string) {
+	s.mu.Lock()
+	s.tunnelErr = msg
+	if s.localURL != "" {
+		s.streamURL = s.localURL
+	}
+	s.mu.Unlock()
+}
+
+// monitorTunnel watches a tunnel for an unexpected mid-stream exit. It only
+// surfaces the failure if this is still the active tunnel and we're still
+// streaming — so an intentional Stop or a RestartTunnel swap stays quiet.
+func (s *Server) monitorTunnel(tun *tunnel.Tunnel, ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-tun.Done:
+		s.mu.Lock()
+		active := s.tun == tun && s.status == "streaming"
+		provider := s.cfg.Tunnel
+		s.mu.Unlock()
+		if active && ctx.Err() == nil {
+			s.log("Tunnel process exited unexpectedly")
+			s.setTunnelError(provider + " tunnel stopped unexpectedly — click Retry to reconnect")
+		}
+	}
+}
+
+// stopTunnel tears down the active tunnel under tunnelMu so it can't race a
+// concurrent startTunnel/RestartTunnel and orphan a tunnel process.
+func (s *Server) stopTunnel() {
+	s.tunnelMu.Lock()
+	s.mu.Lock()
+	tun := s.tun
+	s.tun = nil
+	s.mu.Unlock()
+	if tun != nil {
+		tun.Stop()
+	}
+	s.tunnelMu.Unlock()
+}
+
 // Stop gracefully stops the entire streaming pipeline.
 func (s *Server) Stop() error {
 	s.mu.Lock()
@@ -316,12 +441,15 @@ func (s *Server) Stop() error {
 		s.mu.Unlock()
 		return nil
 	}
-	tun := s.tun
-	s.tun = nil
 	s.mu.Unlock()
 
 	s.log("Stopping stream...")
 
+	// Stop the tunnel FIRST, while its context is still live. The provider may
+	// be launched via a shim that spawns the real binary as a child; the
+	// process-tree kill must run before context cancellation kills only the
+	// parent and orphans the child. Serialized with startTunnel/RestartTunnel.
+	s.stopTunnel()
 	// Cancel server context (stops FFmpeg, janitor, audio)
 	if s.srvCancel != nil {
 		s.srvCancel()
@@ -334,10 +462,6 @@ func (s *Server) Stop() error {
 	if s.audioPipe != nil {
 		s.audioPipe.Close()
 		s.audioPipe = nil
-	}
-	// Explicitly stop tunnel process (don't rely on context alone)
-	if tun != nil {
-		tun.Stop()
 	}
 	// Shut down HTTP server
 	if s.httpSrv != nil {
@@ -362,9 +486,10 @@ func (s *Server) Stop() error {
 func (s *Server) State() StreamState {
 	s.mu.Lock()
 	state := StreamState{
-		Status:    s.status,
-		Error:     s.errMsg,
-		StreamURL: s.streamURL,
+		Status:      s.status,
+		Error:       s.errMsg,
+		StreamURL:   s.streamURL,
+		TunnelError: s.tunnelErr,
 	}
 	if s.status == "streaming" {
 		state.Uptime = time.Since(s.startTime)
@@ -412,10 +537,11 @@ func (s *Server) failStream(msg string) {
 	s.mu.Lock()
 	s.status = "error"
 	s.errMsg = msg
-	tun := s.tun
-	s.tun = nil
 	s.mu.Unlock()
 
+	// Stop the tunnel first, while its context is still live, so the
+	// process-tree kill reaches any shim-spawned child (see Stop).
+	s.stopTunnel()
 	// Cancel server context (stops audio capturer, janitor)
 	if s.srvCancel != nil {
 		s.srvCancel()
@@ -428,10 +554,6 @@ func (s *Server) failStream(msg string) {
 	if s.audioPipe != nil {
 		s.audioPipe.Close()
 		s.audioPipe = nil
-	}
-	// Stop tunnel process
-	if tun != nil {
-		tun.Stop()
 	}
 	// Shut down HTTP server to free the port
 	if s.httpSrv != nil {

@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
-  import { StartStream, StopStream, RestartStream, GetState, GetConfig, SaveConfig, GetLogEntries, DetectSystem, SwitchMonitor, HasFFmpeg, DownloadFFmpeg } from '../../wailsjs/go/gui/App';
+  import { StartStream, StopStream, RestartStream, GetState, GetConfig, SaveConfig, GetLogEntries, DetectSystem, SwitchMonitor, HasFFmpeg, DownloadFFmpeg, RetryTunnel } from '../../wailsjs/go/gui/App';
   import { EventsOn, ClipboardSetText } from '../../wailsjs/runtime/runtime';
   import StatsRow from './StatsRow.svelte';
   import EventLog from './EventLog.svelte';
@@ -104,6 +104,19 @@
     setTimeout(() => copied = false, 2000);
   }
 
+  let retryingTunnel = false;
+  async function retryTunnel() {
+    retryingTunnel = true;
+    try {
+      await RetryTunnel();
+    } catch (err) {
+      // The failure is reflected in state.tunnelError via polling.
+    } finally {
+      state = await GetState();
+      retryingTunnel = false;
+    }
+  }
+
   function formatUptime(ns) {
     if (!ns) return '00:00:00';
     const totalSec = Math.floor(ns / 1e9);
@@ -147,6 +160,18 @@
     {/if}
   </div>
 </div>
+
+{#if streaming && state.tunnelError}
+  <div class="bg-yellow-900/40 border-b border-yellow-700/60 px-6 py-2.5 flex items-center justify-between gap-4">
+    <div class="text-yellow-300 text-sm">
+      ⚠ {state.tunnelError} — serving the local-network URL above for now.
+    </div>
+    <button on:click={retryTunnel} disabled={retryingTunnel}
+      class="bg-yellow-600 hover:bg-yellow-500 disabled:opacity-60 text-white text-xs px-3 py-1 rounded transition-colors whitespace-nowrap">
+      {retryingTunnel ? 'Retrying…' : 'Retry tunnel'}
+    </button>
+  </div>
+{/if}
 
 {#if streaming}
   <StatsRow {state} />

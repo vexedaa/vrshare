@@ -10,6 +10,7 @@ import (
 type StreamState struct {
 	Status        string        `json:"status"` // "idle", "starting", "streaming", "error"
 	Error         string        `json:"error"`
+	TunnelError   string        `json:"tunnelError"` // non-empty when the configured tunnel failed; stream still works on the local URL
 	Uptime        time.Duration `json:"uptime"`
 	StreamURL     string        `json:"streamURL"`
 	FPS           float64       `json:"fps"`

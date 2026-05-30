@@ -25,8 +25,9 @@ func ParseCloudflaredURL(line string) (string, bool) {
 
 // Tunnel represents an active tunnel process.
 type Tunnel struct {
-	cmd *exec.Cmd
-	URL string
+	cmd  *exec.Cmd
+	URL  string
+	Done chan struct{} // closed when the tunnel process exits
 }
 
 // StartCloudflare launches a cloudflared quick tunnel.
@@ -50,7 +51,7 @@ func StartCloudflare(ctx context.Context, localPort int) (*Tunnel, error) {
 		return nil, fmt.Errorf("starting cloudflared: %w", err)
 	}
 
-	t := &Tunnel{cmd: cmd}
+	t := &Tunnel{cmd: cmd, Done: make(chan struct{})}
 
 	urlCh := make(chan string, 1)
 	errCh := make(chan error, 1)
@@ -60,12 +61,20 @@ func StartCloudflare(ctx context.Context, localPort int) (*Tunnel, error) {
 			line := scanner.Text()
 			log.Printf("[cloudflared] %s", line)
 			if url, ok := ParseCloudflaredURL(line); ok {
-				urlCh <- url
+				select {
+				case urlCh <- url:
+				default:
+				}
 			}
 		}
 	}()
 	go func() {
-		errCh <- cmd.Wait()
+		err := cmd.Wait()
+		select {
+		case errCh <- err:
+		default:
+		}
+		close(t.Done)
 	}()
 
 	select {
@@ -78,7 +87,7 @@ func StartCloudflare(ctx context.Context, localPort int) (*Tunnel, error) {
 		}
 		return nil, fmt.Errorf("cloudflared exited without providing URL")
 	case <-ctx.Done():
-		cmd.Process.Kill()
+		killTree(cmd)
 		return nil, ctx.Err()
 	}
 }
@@ -107,7 +116,7 @@ func StartTailscale(ctx context.Context, localPort int) (*Tunnel, error) {
 		return nil, fmt.Errorf("starting tailscale funnel: %w", err)
 	}
 
-	t := &Tunnel{cmd: cmd}
+	t := &Tunnel{cmd: cmd, Done: make(chan struct{})}
 
 	// tailscale funnel outputs the URL to stdout like:
 	// https://machine-name.tailnet.ts.net/
@@ -121,7 +130,10 @@ func StartTailscale(ctx context.Context, localPort int) (*Tunnel, error) {
 			line := scanner.Text()
 			log.Printf("[tailscale] %s", line)
 			if match := tsURLRe.FindString(line); match != "" {
-				urlCh <- match
+				select {
+				case urlCh <- match:
+				default:
+				}
 			}
 		}
 	}()
@@ -132,7 +144,12 @@ func StartTailscale(ctx context.Context, localPort int) (*Tunnel, error) {
 		}
 	}()
 	go func() {
-		errCh <- cmd.Wait()
+		err := cmd.Wait()
+		select {
+		case errCh <- err:
+		default:
+		}
+		close(t.Done)
 	}()
 
 	select {
@@ -145,7 +162,7 @@ func StartTailscale(ctx context.Context, localPort int) (*Tunnel, error) {
 		}
 		return nil, fmt.Errorf("tailscale exited without providing URL")
 	case <-ctx.Done():
-		cmd.Process.Kill()
+		killTree(cmd)
 		return nil, ctx.Err()
 	}
 }
@@ -172,8 +189,10 @@ func (t *Tunnel) MP4URL() string {
 }
 
 func (t *Tunnel) Stop() {
-	if t.cmd != nil && t.cmd.Process != nil {
-		t.cmd.Process.Kill()
-		t.cmd.Wait() // reap the process to avoid zombies
+	killTree(t.cmd)
+	// The reaper goroutine calls cmd.Wait() and closes Done; wait for it so the
+	// process is fully reaped (no zombie) and we don't call Wait twice.
+	if t.Done != nil {
+		<-t.Done
 	}
 }

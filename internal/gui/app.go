@@ -102,6 +102,13 @@ func (a *App) RestartStream() error {
 	return a.srv.RestartCapture()
 }
 
+// RetryTunnel restarts the tunnel with the current config without dropping the
+// stream. Used to recover from a failed or dead tunnel, or to apply a provider
+// change. Returns an error describing the failure if the tunnel won't come up.
+func (a *App) RetryTunnel() error {
+	return a.srv.RestartTunnel()
+}
+
 // SwitchMonitor changes the capture monitor and restarts FFmpeg.
 func (a *App) SwitchMonitor(index int) error {
 	cfg := a.srv.Config()
@@ -137,8 +144,18 @@ func (a *App) SaveConfig(cfg config.Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+	old := a.srv.Config()
 	a.srv.SetConfig(cfg)
-	return server.SaveConfig(a.dataDir, cfg)
+	if err := server.SaveConfig(a.dataDir, cfg); err != nil {
+		return err
+	}
+	// If the tunnel provider changed while streaming, apply it by restarting
+	// just the tunnel (the rest of the pipeline keeps running). Run async so
+	// Save returns promptly; the dashboard reflects the result via state polling.
+	if old.Tunnel != cfg.Tunnel && a.srv.State().Status == "streaming" {
+		go a.srv.RestartTunnel()
+	}
+	return nil
 }
 
 // ListPresets returns all saved presets.

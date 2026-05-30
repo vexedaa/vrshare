@@ -92,7 +92,7 @@ func authorizeTailscale() (string, error) {
 		return "", fmt.Errorf("tailscale not installed")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "tailscale", "login")
@@ -146,13 +146,18 @@ func authorizeTailscale() (string, error) {
 			cmd.Process.Kill()
 			return "Already logged in to Tailscale.", nil
 		}
+		// Best-effort auto-open; also return the URL so the UI can show a
+		// clickable link even if the browser didn't open.
 		openBrowser(url)
-		// Don't wait for the process — it stays alive until auth completes
+		// Don't wait for the process — it stays alive until auth completes.
 		go cmd.Wait()
-		return fmt.Sprintf("Opening browser for Tailscale login."), nil
+		return url, nil
 	case <-ctx.Done():
 		cmd.Process.Kill()
-		return "", fmt.Errorf("tailscale login timed out")
+		// Don't fail silently: tell the user how to finish manually.
+		return "Couldn't detect a Tailscale login link automatically. Open the " +
+			"Tailscale app (or run 'tailscale login' in a terminal) to sign in, " +
+			"then click Refresh.", nil
 	}
 }
 
