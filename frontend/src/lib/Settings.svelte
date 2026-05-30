@@ -223,6 +223,17 @@
           <span>+30 dB</span>
         </div>
       </div>
+      <div class="mt-3">
+        <label class="text-xs text-slate-400 block mb-1">Audio sync offset ({config.audioOffsetMs ?? 0} ms)</label>
+        <input type="range" bind:value={config.audioOffsetMs} min="-1000" max="1000" step="10"
+          class="w-full accent-sky-500" />
+        <div class="flex justify-between text-xs text-slate-600 mt-0.5">
+          <span>audio earlier</span>
+          <span>0</span>
+          <span>audio later</span>
+        </div>
+        <p class="text-xs text-slate-500 mt-1">Increase if audio lags behind video; decrease if audio is ahead. Saving re-applies it to a running stream.</p>
+      </div>
     {/if}
   </section>
 

@@ -22,6 +22,22 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 	// imperceptible (<2 frames at 30fps rather than ~15 frames).
 	args = append(args, "-stats_period", "0.05")
 
+	// A/V sync correction for the constant capture-pipeline offset. AudioOffsetMs
+	// is calibrated by the user: a positive value means audio lags video, so we
+	// delay the video input to match; a negative value (audio ahead) delays the
+	// audio input instead. Drift over a long session is handled separately by
+	// aresample=async below.
+	videoOffset, audioOffset := 0.0, 0.0
+	if cfg.AudioOffsetMs > 0 {
+		videoOffset = float64(cfg.AudioOffsetMs) / 1000.0
+	} else if cfg.AudioOffsetMs < 0 {
+		audioOffset = float64(-cfg.AudioOffsetMs) / 1000.0
+	}
+	if videoOffset > 0 {
+		// Applies to the next input (the video capture added immediately below).
+		args = append(args, "-itsoffset", fmt.Sprintf("%.3f", videoOffset))
+	}
+
 	useDD := useDDAgrab && runtime.GOOS == "windows"
 
 	if useDD {
@@ -58,6 +74,10 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 
 	// Audio input (raw PCM from WASAPI capturer via stdin)
 	if cfg.Audio {
+		if audioOffset > 0 {
+			// Applies to the next input (the audio pipe added immediately below).
+			args = append(args, "-itsoffset", fmt.Sprintf("%.3f", audioOffset))
+		}
 		args = append(args, "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0")
 	}
 
@@ -102,12 +122,16 @@ func BuildArgs(cfg config.Config, resolvedEncoder string, segmentDir string, use
 		args = append(args, "-vf", vf)
 	}
 
-	// Audio encoding
+	// Audio encoding. aresample=async=1 continuously resamples audio to track the
+	// reference clock, absorbing drift between the WASAPI audio-device clock and
+	// the system/encoder clock so A/V stays in sync over long sessions. An
+	// optional volume filter is chained ahead of it.
 	if cfg.Audio {
+		af := "aresample=async=1"
 		if cfg.AudioGain != 0 {
-			args = append(args, "-af", fmt.Sprintf("volume=%ddB", cfg.AudioGain))
+			af = fmt.Sprintf("volume=%ddB,%s", cfg.AudioGain, af)
 		}
-		args = append(args, "-c:a", "aac", "-b:a", "128k")
+		args = append(args, "-af", af, "-c:a", "aac", "-b:a", "128k")
 	}
 
 	gop := fmt.Sprintf("%d", cfg.FPS)

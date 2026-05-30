@@ -24,7 +24,8 @@ type Config struct {
 	Bitrate     int         `json:"bitrate"`
 	Encoder     EncoderType `json:"encoder"`
 	Audio       bool        `json:"audio"`
-	AudioGain   int         `json:"audioGain"` // dB boost, 0 = no change, default 6
+	AudioGain   int         `json:"audioGain"`     // dB boost, 0 = no change, default 6
+	AudioOffsetMs int       `json:"audioOffsetMs"` // A/V sync correction: +ve = audio lags video (delays video to match); -ve = audio leads (delays audio)
 	AudioDevice string      `json:"audioDevice"`
 	Tunnel      string      `json:"tunnel"`
 }
@@ -56,6 +57,9 @@ func (c Config) Validate() error {
 	}
 	if c.AudioGain < -20 || c.AudioGain > 30 {
 		return fmt.Errorf("audio gain must be between -20 and 30 dB, got %d", c.AudioGain)
+	}
+	if c.AudioOffsetMs < -5000 || c.AudioOffsetMs > 5000 {
+		return fmt.Errorf("audio offset must be between -5000 and 5000 ms, got %d", c.AudioOffsetMs)
 	}
 	if c.Resolution != "" {
 		if _, _, err := ParseResolution(c.Resolution); err != nil {

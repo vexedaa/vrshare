@@ -184,7 +184,8 @@ func TestBuildArgs_AudioEnabled(t *testing.T) {
 	assertContains(t, args, "-ar", "48000")
 	assertContains(t, args, "-ac", "2")
 	assertContains(t, args, "-i", "pipe:0")
-	assertContains(t, args, "-af", "volume=6dB")
+	// Volume is chained ahead of the drift corrector.
+	assertContains(t, args, "-af", "volume=6dB,aresample=async=1")
 	assertContains(t, args, "-c:a", "aac")
 	assertContains(t, args, "-b:a", "128k")
 	assertNotContains(t, args, "dshow")
@@ -196,8 +197,38 @@ func TestBuildArgs_AudioGainZero(t *testing.T) {
 	cfg.AudioGain = 0
 	args := BuildArgs(cfg, "cpu", "/tmp/vrshare", false)
 
-	assertNotContains(t, args, "-af")
+	// No volume filter, but the drift corrector is always present.
+	assertContains(t, args, "-af", "aresample=async=1")
 	assertContains(t, args, "-c:a", "aac")
+}
+
+func TestBuildArgs_AudioSyncOffset(t *testing.T) {
+	// Positive offset (audio lags) delays the VIDEO input.
+	cfg := config.Default()
+	cfg.AudioOffsetMs = 500
+	args := BuildArgs(cfg, "nvenc", "/tmp/vrshare", true)
+	assertContains(t, args, "-itsoffset", "0.500")
+	if idxOf(args, "-itsoffset") > idxOf(args, "ddagrab=output_idx=0:framerate=30") {
+		t.Error("positive offset must place -itsoffset before the video input")
+	}
+
+	// Negative offset (audio leads) delays the AUDIO input.
+	cfg2 := config.Default()
+	cfg2.AudioOffsetMs = -250
+	args2 := BuildArgs(cfg2, "nvenc", "/tmp/vrshare", true)
+	assertContains(t, args2, "-itsoffset", "0.250")
+	if io, ip := idxOf(args2, "-itsoffset"), idxOf(args2, "pipe:0"); io < 0 || io > ip {
+		t.Error("negative offset must place -itsoffset just before the audio input")
+	}
+	if idxOf(args2, "-itsoffset") < idxOf(args2, "ddagrab=output_idx=0:framerate=30") {
+		t.Error("negative offset must not delay the video input")
+	}
+
+	// Zero offset: no -itsoffset at all.
+	cfg3 := config.Default()
+	cfg3.AudioOffsetMs = 0
+	args3 := BuildArgs(cfg3, "nvenc", "/tmp/vrshare", true)
+	assertNotContains(t, args3, "-itsoffset")
 }
 
 func TestBuildArgs_AudioDisabled(t *testing.T) {
@@ -225,6 +256,15 @@ func assertContains(t *testing.T, args []string, key, value string) {
 		}
 	}
 	t.Errorf("args should contain %s %s, got %v", key, value, args)
+}
+
+func idxOf(args []string, val string) int {
+	for i, a := range args {
+		if a == val {
+			return i
+		}
+	}
+	return -1
 }
 
 func assertNotContains(t *testing.T, args []string, key string) {
