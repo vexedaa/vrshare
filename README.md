@@ -1,3 +1,5 @@
+Support me on Ko-Fi: https://ko-fi.com/vexedaa
+
 # VRShare
 
 Stream your desktop directly into VRChat. No YouTube, no Twitch — just paste a URL into any VRChat video player and your screen is live.
