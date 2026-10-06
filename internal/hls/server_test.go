@@ -284,3 +284,37 @@ func TestServer_PlayerPage_LLHLSConfig(t *testing.T) {
 		t.Error("player should configure liveMaxLatencyDurationCount")
 	}
 }
+
+// /stream.mp4 spawns one FFmpeg process per request, and anyone who can see
+// the stream URL can request it — in VRChat that's everyone in the instance.
+// It must turn viewers away once 20 are connected, before spawning anything,
+// so a hostile viewer can't exhaust the streamer's PC with connections.
+func TestServer_MP4ViewerLimit(t *testing.T) {
+	srv := NewServer(t.TempDir())
+	// A missing binary makes any spawn attempt fail with 500, which tells it
+	// apart from the limit's 503 (returned before spawning).
+	srv.SetMP4Support(filepath.Join(t.TempDir(), "no-such-ffmpeg.exe"), 8080)
+
+	if got := cap(srv.mp4Slots); got != 20 {
+		t.Fatalf("MP4 viewer limit = %d, want 20", got)
+	}
+	for i := 0; i < cap(srv.mp4Slots); i++ {
+		srv.mp4Slots <- struct{}{} // 20 viewers connected
+	}
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest("GET", "/stream.mp4", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("21st MP4 viewer got %d, want 503 before any FFmpeg spawn", rec.Code)
+	}
+
+	<-srv.mp4Slots // one viewer leaves
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest("GET", "/stream.mp4", nil))
+	if rec.Code == http.StatusServiceUnavailable {
+		t.Fatal("a freed MP4 slot couldn't be reused")
+	}
+	if got, want := len(srv.mp4Slots), cap(srv.mp4Slots)-1; got != want {
+		t.Errorf("%d slots in use after the request ended, want %d — slot leaked", got, want)
+	}
+}

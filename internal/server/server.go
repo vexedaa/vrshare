@@ -135,7 +135,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.setError(fmt.Sprintf("Port %d is already in use (is another instance running?)", s.cfg.Port))
 		return fmt.Errorf("port %d already in use", s.cfg.Port)
 	}
-	s.httpSrv = &http.Server{Handler: s.hlsSrv}
+	s.httpSrv = newHTTPServer(s.hlsSrv)
 
 	go func() {
 		if err := s.httpSrv.Serve(ln); err != http.ErrServerClosed {
@@ -689,6 +689,17 @@ func (s *Server) closeSessionLog() {
 		s.logFile = nil
 	}
 	s.logMu.Unlock()
+}
+
+// newHTTPServer returns the stream's HTTP server. Anyone who can see the stream
+// URL can reach it, so it bounds how long a client may take to send its
+// request headers. There is deliberately no write timeout: MP4 viewers and slow
+// segment downloads stream for as long as they stay connected.
+func newHTTPServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 }
 
 func getOutboundIP() string {

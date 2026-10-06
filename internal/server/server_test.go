@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,5 +113,19 @@ func TestFailStreamFromFFmpegGoroutineDoesNotDeadlock(t *testing.T) {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Stop hung after the stream failed")
+	}
+}
+
+// Anyone who can see the stream URL can reach the HTTP server (in VRChat,
+// everyone in the instance), so a client mustn't be able to pin connections
+// open by trickling its request headers. There must be no write timeout,
+// though: MP4 viewers stream for as long as they stay connected.
+func TestHTTPServerTimeouts(t *testing.T) {
+	srv := newHTTPServer(http.NotFoundHandler())
+	if srv.ReadHeaderTimeout <= 0 {
+		t.Error("no ReadHeaderTimeout — slow-header clients can hold connections forever")
+	}
+	if srv.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout = %v — it would cut off long-running MP4 viewers", srv.WriteTimeout)
 	}
 }

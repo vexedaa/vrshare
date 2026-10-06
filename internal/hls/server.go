@@ -44,6 +44,12 @@ if(Hls.isSupported()){
 </body>
 </html>`
 
+// maxMP4Viewers caps concurrent /stream.mp4 viewers. Each one is a separate
+// FFmpeg process, and anyone who can see the stream URL (in VRChat, everyone
+// in the instance) can connect, so without a cap a hostile viewer could open
+// connections until the streamer's PC runs out of resources.
+const maxMP4Viewers = 20
+
 // Server serves HLS segments, tracks active downloads, and provides
 // a fragmented MP4 endpoint for players that don't support HLS.
 type Server struct {
@@ -51,10 +57,11 @@ type Server struct {
 	port         int
 	ffmpegPath   string
 	blockTimeout time.Duration
-	active       map[string]int       // segment name -> active reader count
+	active       map[string]int // segment name -> active reader count
 	activeMu     sync.Mutex
 	viewers      map[string]time.Time // IP -> last seen time
 	viewersMu    sync.Mutex
+	mp4Slots     chan struct{} // one token per connected MP4 viewer
 }
 
 func NewServer(dir string) *Server {
@@ -63,6 +70,7 @@ func NewServer(dir string) *Server {
 		blockTimeout: 5 * time.Second,
 		active:       make(map[string]int),
 		viewers:      make(map[string]time.Time),
+		mp4Slots:     make(chan struct{}, maxMP4Viewers),
 	}
 }
 
@@ -260,6 +268,16 @@ func (s *Server) playlistContainsMSN(path string, targetMSN int) bool {
 func (s *Server) serveMP4(w http.ResponseWriter, r *http.Request) {
 	if s.ffmpegPath == "" || s.port == 0 {
 		http.Error(w, "MP4 streaming not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Claim a viewer slot before spawning anything. Rejections aren't logged:
+	// a flood of requests shouldn't become a flood of log lines.
+	select {
+	case s.mp4Slots <- struct{}{}:
+		defer func() { <-s.mp4Slots }()
+	default:
+		http.Error(w, "too many MP4 viewers", http.StatusServiceUnavailable)
 		return
 	}
 
