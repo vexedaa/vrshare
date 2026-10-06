@@ -77,3 +77,40 @@ func TestCleanupStaleSegmentDirs(t *testing.T) {
 		}
 	}
 }
+
+// failStream runs on the FFmpeg goroutine itself, after every encoder
+// configuration has failed — the goroutine whose deferred close(ffmpegDone) is
+// what failStream used to wait on. That deadlocked: cleanup never finished
+// (HTTP port left bound, audio pipe open) and a later Stop() hung forever on
+// the same channel, so the only way out was killing the app.
+func TestFailStreamFromFFmpegGoroutineDoesNotDeadlock(t *testing.T) {
+	s := New(config.Default())
+	s.status = "streaming"
+	s.ffmpegDone = make(chan struct{})
+
+	failed := make(chan struct{})
+	go func() {
+		defer close(s.ffmpegDone)
+		s.failStream("FFmpeg failed with all encoder configurations")
+		close(failed)
+	}()
+	select {
+	case <-failed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("failStream deadlocked waiting on the goroutine it runs on")
+	}
+	if st := s.State(); st.Status != "error" {
+		t.Errorf("status after failStream = %q, want \"error\"", st.Status)
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop hung after the stream failed")
+	}
+}

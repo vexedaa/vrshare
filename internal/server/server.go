@@ -565,6 +565,10 @@ func (s *Server) LogEntries() []LogEntry {
 // failStream is called when FFmpeg exits unexpectedly during streaming.
 // It sets the error state and cleans up all server resources so that
 // the user can start a new stream without restarting the app.
+//
+// It runs on the FFmpeg goroutine itself, after every FFmpeg attempt has
+// exited, so it must not wait on ffmpegDone: that channel is closed by this
+// goroutine's own deferred close, only after failStream returns.
 func (s *Server) failStream(msg string) {
 	s.log(msg)
 	s.mu.Lock()
@@ -579,11 +583,8 @@ func (s *Server) failStream(msg string) {
 	if s.srvCancel != nil {
 		s.srvCancel()
 	}
-	// Wait for FFmpeg to exit before closing the audio pipe
-	if s.ffmpegDone != nil {
-		<-s.ffmpegDone
-	}
-	// Close audio pipe read-end (write-end is closed by AsyncWriter)
+	// Close audio pipe read-end (write-end is closed by AsyncWriter). FFmpeg
+	// has already exited, so nothing is reading it.
 	if s.audioPipe != nil {
 		s.audioPipe.Close()
 		s.audioPipe = nil
