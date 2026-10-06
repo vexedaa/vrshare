@@ -13,9 +13,40 @@ func TestResolveEncoder_ExplicitCPU(t *testing.T) {
 }
 
 func TestResolveEncoder_ExplicitNVENC(t *testing.T) {
-	enc := ResolveEncoder("nvenc", func(string) bool { return false })
+	enc := ResolveEncoder("nvenc", func(e string) bool { return e == "h264_nvenc" })
 	if enc != "nvenc" {
 		t.Errorf("explicit nvenc should return nvenc, got %q", enc)
+	}
+}
+
+// An explicitly chosen GPU encoder that fails its probe (e.g. NVENC picked on
+// an AMD-only machine — the bundled FFmpeg lists every vendor's encoder) must
+// not be used as-is: FFmpeg would crash-loop before falling back to CPU, and
+// the resulting lag shows up as a large audio delay (issue #3).
+func TestResolveEncoder_ExplicitUnavailableFallsBackToWorkingGPU(t *testing.T) {
+	enc := ResolveEncoder("nvenc", func(e string) bool { return e == "h264_amf" })
+	if enc != "amf" {
+		t.Errorf("unavailable explicit nvenc should fall back to working amf, got %q", enc)
+	}
+}
+
+func TestResolveEncoder_ExplicitUnavailableNoGPUFallsBackToCPU(t *testing.T) {
+	enc := ResolveEncoder("qsv", func(string) bool { return false })
+	if enc != "cpu" {
+		t.Errorf("unavailable explicit qsv with no GPU should fall back to cpu, got %q", enc)
+	}
+}
+
+func TestCachedProbe_ProbesEachEncoderOnce(t *testing.T) {
+	calls := map[string]int{}
+	probe := CachedProbe(func(e string) bool {
+		calls[e]++
+		return e == "h264_amf"
+	})
+	// Explicit nvenc fails its probe, then auto resolution re-checks nvenc.
+	ResolveEncoder("nvenc", probe)
+	if calls["h264_nvenc"] != 1 {
+		t.Errorf("h264_nvenc probed %d times, want 1 (test-encodes are slow)", calls["h264_nvenc"])
 	}
 }
 

@@ -20,8 +20,9 @@ type Manager struct {
 	SegmentDir   string
 	MaxRestarts  int
 	RestartDelay time.Duration
-	StderrWriter io.Writer // optional: receives FFmpeg stderr output
+	StderrWriter io.Writer    // optional: receives FFmpeg stderr output
 	LogFunc      func(string) // optional: receives log messages for session log
+	BeforeStart  func()       // optional: runs right before every FFmpeg launch, restarts included
 	restartCount int
 	cmd          *exec.Cmd
 }
@@ -109,6 +110,10 @@ func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) er
 		stderrBuf.limit = 4096
 		if m.StderrWriter != nil {
 			stderrBuf.forward = m.StderrWriter
+		}
+
+		if m.BeforeStart != nil {
+			m.BeforeStart()
 		}
 
 		m.cmd = exec.CommandContext(ctx, m.FFmpegPath, args...)

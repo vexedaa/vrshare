@@ -22,10 +22,13 @@ const (
 	sampleRate    = 48000
 )
 
-// Capturer captures system audio via WASAPI, excluding VRChat's audio.
+// Capturer captures audio via WASAPI: by default all system audio except
+// VRChat's (process loopback), or everything playing on one chosen output
+// device (endpoint loopback).
 type Capturer struct {
 	writer        io.Writer
 	vrchatPID     uint32
+	device        string // "" = all system audio except VRChat; else an output device ID or name
 	mu            sync.Mutex
 	cancelFunc    context.CancelFunc
 	sessionCancel context.CancelFunc
@@ -48,14 +51,31 @@ func (c *Capturer) Start(ctx context.Context) {
 	ctx, c.cancelFunc = context.WithCancel(ctx)
 
 	c.vrchatPID = FindVRChatPID()
-	if c.vrchatPID > 0 {
+	c.mu.Lock()
+	systemAudio := IsSystemAudio(c.device)
+	c.mu.Unlock()
+	// captureLoop announces the source once it opens.
+	if systemAudio && c.vrchatPID > 0 {
 		log.Printf("Audio: excluding VRChat.exe (PID %d)", c.vrchatPID)
-	} else {
-		log.Println("Audio: VRChat not running, capturing all system audio")
 	}
 
 	go c.captureLoop(ctx)
 	go c.monitorVRChat(ctx)
+}
+
+// SetDevice selects what to capture: "" (or the legacy "Default Output
+// Device") for all system audio except VRChat, or an output device's endpoint
+// ID or friendly name. Takes effect immediately on a running capture.
+func (c *Capturer) SetDevice(device string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if device == c.device {
+		return
+	}
+	c.device = device
+	if c.sessionCancel != nil {
+		c.sessionCancel()
+	}
 }
 
 // Stop stops the audio capture.
@@ -83,75 +103,121 @@ func (c *Capturer) captureLoop(ctx context.Context) {
 		defer procRoUninitialize.Call()
 	}
 
+	lastErr := ""    // last failure logged, so a persistent one isn't logged every retry
+	lastSource := "" // last source announced, so restarts don't repeat it
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		default:
 		}
 
-		c.mu.Lock()
-		pid := c.vrchatPID
-		c.mu.Unlock()
-
-		audioClient, err := c.activateLoopback(pid)
-		if err != nil {
-			log.Printf("Audio: WASAPI activation failed: %v — retrying in 1s", err)
-			// Write silence while we retry to keep FFmpeg's audio stream continuous
-			if wErr := c.writeSilence(1 * time.Second); wErr != nil {
-				log.Printf("Audio: write error: %v — stopping capture", wErr)
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(1 * time.Second):
-			}
-			continue
-		}
-
+		// Read the source and publish this session's cancel func under one lock,
+		// so a SetDevice or VRChat change from here on always cancels this
+		// session — including while it is still activating or waiting to retry.
 		sessionCtx, sessionCancel := context.WithCancel(ctx)
 		c.mu.Lock()
+		pid := c.vrchatPID
+		device := c.device
 		c.sessionCancel = sessionCancel
 		c.mu.Unlock()
 
-		err = c.runCaptureSession(sessionCtx, audioClient)
+		var (
+			audioClient   uintptr
+			source        = "all system audio except VRChat"
+			stopKeepAlive = func() {}
+			bufDuration   int64
+			err           error
+		)
+		if IsSystemAudio(device) {
+			audioClient, err = c.activateLoopback(pid)
+		} else {
+			// A missing device is retried below with silence, never swapped for
+			// system audio: the user picked a device to leave other sound out.
+			var name string
+			audioClient, name, stopKeepAlive, err = activateEndpointLoopback(device)
+			source = fmt.Sprintf("output device %q", name)
+			bufDuration = endpointBufferDuration
+		}
+		if err != nil {
+			if msg := err.Error(); msg != lastErr {
+				log.Printf("Audio: capture unavailable: %v — sending silence and retrying", err)
+				lastErr = msg
+			}
+			lastSource = ""
+			// Keep FFmpeg's audio input fed while we wait to retry. A source
+			// change ends the wait early.
+			wErr := c.padSilence(sessionCtx, 1*time.Second)
+			sessionCancel()
+			if wErr != nil {
+				log.Printf("Audio: write error: %v — stopping capture", wErr)
+				return
+			}
+			continue
+		}
+		if source != lastSource {
+			log.Printf("Audio: capturing %s", source)
+			lastSource = source
+		}
+
+		err = c.runCaptureSession(sessionCtx, audioClient, bufDuration)
 		sessionCancel()
 
 		comCall(audioClient, 2) // Release
+		stopKeepAlive()
 
 		if ctx.Err() != nil {
 			return
 		}
 
-		if err != nil {
+		if err == nil {
+			lastErr = ""
+		} else if msg := err.Error(); msg != lastErr {
 			log.Printf("Audio: capture session ended: %v", err)
+			lastErr = msg
 		}
 
-		// Write silence during the gap to keep audio continuous
-		if wErr := c.writeSilence(100 * time.Millisecond); wErr != nil {
+		// Fill the gap before the next session to keep audio continuous
+		if wErr := c.padSilence(ctx, 100*time.Millisecond); wErr != nil {
 			log.Printf("Audio: write error: %v — stopping capture", wErr)
 			return
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-// writeSilence writes zero PCM data for the given duration to keep FFmpeg fed.
-func (c *Capturer) writeSilence(d time.Duration) error {
-	frames := int(d.Seconds() * sampleRate)
-	remaining := frames * bytesPerFrame
-	for remaining > 0 {
-		n := len(c.silenceBuf)
-		if n > remaining {
-			n = remaining
+// padSilence feeds silence to the writer in real time for d, or until ctx is
+// done, so FFmpeg's audio input never starves while capture is unavailable.
+// Pacing matters: writing the whole duration up front puts audio that far
+// ahead of the wall clock, and once capture resumes the excess becomes a
+// permanent delay of audio behind video.
+func (c *Capturer) padSilence(ctx context.Context, d time.Duration) error {
+	total := int(d.Seconds() * sampleRate) // frames
+	written := 0
+	start := time.Now()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		due := int(time.Since(start).Seconds() * sampleRate)
+		if due > total {
+			due = total
 		}
-		if _, err := c.writer.Write(c.silenceBuf[:n]); err != nil {
-			return err
+		for written < due {
+			n := due - written
+			if max := len(c.silenceBuf) / bytesPerFrame; n > max {
+				n = max
+			}
+			if _, err := c.writer.Write(c.silenceBuf[:n*bytesPerFrame]); err != nil {
+				return err
+			}
+			written += n
 		}
-		remaining -= n
+		if written >= total {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
 	}
-	return nil
 }
 
 func (c *Capturer) activateLoopback(excludePID uint32) (uintptr, error) {
@@ -218,14 +284,16 @@ func (c *Capturer) activateLoopback(excludePID uint32) (uintptr, error) {
 // IAudioCaptureClient vtable (inherits IUnknown):
 //
 //	3=GetBuffer, 4=ReleaseBuffer, 5=GetNextPacketSize
-func (c *Capturer) runCaptureSession(ctx context.Context, audioClient uintptr) error {
+//
+// bufDuration is the stream buffer in 100ns units (0 = engine default).
+func (c *Capturer) runCaptureSession(ctx context.Context, audioClient uintptr, bufDuration int64) error {
 	format := PCM16Stereo48kHz()
 	flags := uint32(AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY)
 
 	hr, _ := comCall(audioClient, 3, // Initialize
 		uintptr(AUDCLNT_SHAREMODE_SHARED),
 		uintptr(flags),
-		0, // buffer duration
+		uintptr(bufDuration),
 		0, // periodicity
 		uintptr(unsafe.Pointer(&format)),
 		0, // session GUID
@@ -278,7 +346,12 @@ func (c *Capturer) readBuffers(captureClient uintptr) error {
 			0, // devicePosition
 			0, // qpcPosition
 		)
-		if hr != 0 || numFrames == 0 {
+		if hr&0x80000000 != 0 {
+			// A real failure, e.g. AUDCLNT_E_DEVICE_INVALIDATED when the device
+			// is unplugged. End the session so the loop retries with silence.
+			return fmt.Errorf("IAudioCaptureClient.GetBuffer failed: 0x%x", hr)
+		}
+		if numFrames == 0 { // AUDCLNT_S_BUFFER_EMPTY: no data yet
 			break
 		}
 
@@ -327,7 +400,9 @@ func (c *Capturer) monitorVRChat(ctx context.Context) {
 			oldPID := c.vrchatPID
 			if newPID != oldPID {
 				c.vrchatPID = newPID
-				if c.sessionCancel != nil {
+				// Only system-audio capture excludes VRChat; a single-device
+				// capture doesn't need restarting.
+				if c.sessionCancel != nil && IsSystemAudio(c.device) {
 					c.sessionCancel()
 				}
 				c.mu.Unlock()

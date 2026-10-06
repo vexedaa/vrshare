@@ -4,9 +4,11 @@ package gui
 
 import (
 	"fmt"
+	"log"
 	"syscall"
 	"unsafe"
 
+	"github.com/vexedaa/vrshare/internal/audio"
 	"github.com/vexedaa/vrshare/internal/server"
 )
 
@@ -17,10 +19,26 @@ var (
 
 func detectPlatformDevices() ([]server.MonitorInfo, []server.AudioDevice) {
 	monitors := detectMonitors()
-	audioDevices := []server.AudioDevice{
-		{Name: "Default Output Device", IsDefault: true},
+	return monitors, detectAudioDevices()
+}
+
+// detectAudioDevices lists the selectable audio sources: all system audio
+// (the default) followed by each active output device.
+func detectAudioDevices() []server.AudioDevice {
+	devices := []server.AudioDevice{server.SystemAudioDevice}
+	outputs, err := audio.ListOutputDevices()
+	if err != nil {
+		log.Printf("[detect] Listing audio output devices failed: %v", err)
+		return devices
 	}
-	return monitors, audioDevices
+	for _, d := range outputs {
+		name := d.Name
+		if d.IsDefault {
+			name += " (Windows default)"
+		}
+		devices = append(devices, server.AudioDevice{ID: d.ID, Name: name})
+	}
+	return devices
 }
 
 func detectMonitors() []server.MonitorInfo {

@@ -10,10 +10,14 @@ import (
 
 type audioCapturer struct{}
 
-func newAudioCapturer(_ context.Context, _ io.WriteCloser) *audioCapturer {
+func newAudioCapturer(_ context.Context, _ io.WriteCloser, _ string) *audioCapturer {
 	return &audioCapturer{}
 }
+
+func (a *audioCapturer) setDevice(_ string) {}
 
 func (a *audioCapturer) start(_ context.Context) {
 	log.Println("Audio capture not supported on this platform")
 }
+
+func (a *audioCapturer) discardStale() int { return 0 }

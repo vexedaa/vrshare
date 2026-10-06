@@ -69,6 +69,23 @@ func (aw *AsyncWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Discard drops every chunk still waiting in the buffer and returns how many
+// were dropped. Call it right before (re)starting FFmpeg: anything buffered
+// while no FFmpeg was reading is stale, and feeding it to the new process
+// would put audio permanently behind video by that much. The single chunk the
+// drain goroutine may already be writing (~10ms) can't be recalled.
+func (aw *AsyncWriter) Discard() int {
+	n := 0
+	for {
+		select {
+		case <-aw.ch:
+			n++
+		default:
+			return n
+		}
+	}
+}
+
 func (aw *AsyncWriter) drain(ctx context.Context) {
 	defer close(aw.done)
 	defer aw.w.Close()

@@ -34,7 +34,7 @@ func main() {
 	flag.IntVar(&cfg.Bitrate, "bitrate", cfg.Bitrate, "Video bitrate in kbps")
 	encoder := flag.String("encoder", string(cfg.Encoder), "Encoder: auto, nvenc, qsv, amf, cpu")
 	flag.BoolVar(&cfg.Audio, "audio", cfg.Audio, "Enable system audio capture (excludes VRChat)")
-	flag.StringVar(&cfg.AudioDevice, "audio-device", cfg.AudioDevice, "Specific audio device name")
+	flag.StringVar(&cfg.AudioDevice, "audio-device", cfg.AudioDevice, "Capture only this output device (name or endpoint ID); empty = all system audio except VRChat")
 	flag.Parse()
 
 	cfg.Encoder = config.EncoderType(*encoder)

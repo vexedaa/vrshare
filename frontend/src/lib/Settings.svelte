@@ -22,6 +22,9 @@
 
   onMount(async () => {
     config = await GetConfig();
+    // Configs saved before real devices were listed hold this placeholder,
+    // which meant "all system audio".
+    if (config.audioDevice === 'Default Output Device') config.audioDevice = '';
     settings = await GetSettings();
     systemInfo = await DetectSystem();
     presets = (await ListPresets()) || [];
@@ -139,6 +142,13 @@
     }
   }
 
+  // What Auto resolves to: the first working encoder, in the same priority
+  // order the server uses (NVENC, Quick Sync, AMF, then CPU).
+  $: autoEncoderLabel = systemInfo?.encoders?.find(e => e.available && e.type !== 'auto')?.label;
+  // A saved output device that isn't connected right now (streams silence).
+  $: savedDeviceMissing = config.audioDevice &&
+    systemInfo && !(systemInfo.audioDevices || []).some(d => d.id === config.audioDevice);
+
   const resolutionOptions = ['1920x1080', '2560x1440', '1280x720'];
   const fpsOptions = [30, 60, 120];
 </script>
@@ -159,7 +169,7 @@
       <div>
         <label class="text-xs text-slate-400 block mb-1">Encoder</label>
         <select bind:value={config.encoder} class="w-full bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5">
-          <option value="auto">Auto (best available)</option>
+          <option value="auto">Auto ({autoEncoderLabel || 'best available'})</option>
           {#each (systemInfo?.encoders || []) as enc}
             <option value={enc.type} disabled={!enc.available}>{enc.label}</option>
           {/each}
@@ -206,12 +216,16 @@
     </div>
     {#if config.audio}
       <div>
-        <label class="text-xs text-slate-400 block mb-1">Audio Device</label>
+        <label class="text-xs text-slate-400 block mb-1">Audio Source</label>
         <select bind:value={config.audioDevice} class="w-full bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5">
           {#each (systemInfo?.audioDevices || []) as dev}
-            <option value={dev.name}>{dev.name}</option>
+            <option value={dev.id}>{dev.name}</option>
           {/each}
+          {#if savedDeviceMissing}
+            <option value={config.audioDevice}>Saved device (not connected — sending silence)</option>
+          {/if}
         </select>
+        <p class="text-xs text-slate-500 mt-1">Pick an output device to stream only what plays on it — e.g. send music to one device and keep calls or mic monitoring on another.</p>
       </div>
       <div class="mt-3">
         <label class="text-xs text-slate-400 block mb-1">Volume Boost ({config.audioGain ?? 6} dB)</label>

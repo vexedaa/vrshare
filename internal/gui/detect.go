@@ -1,11 +1,8 @@
 package gui
 
 import (
-	"context"
 	"log"
-	"os/exec"
-	"strings"
-	"syscall"
+	"sync"
 	"time"
 
 	"github.com/vexedaa/vrshare/internal/ffmpeg"
@@ -47,22 +44,35 @@ func detectSystemImpl() server.SystemInfo {
 	} else {
 		log.Printf("[detect] FFmpeg found at: %s", ffmpegPath)
 		log.Println("[detect] Running encoder probe...")
-		encoderList := runHidden(ffmpegPath, "-hide_banner", "-encoders")
-		log.Printf("[detect] Encoder probe returned %d bytes", len(encoderList))
 
+		// Test-encode rather than just checking `ffmpeg -encoders`: FFmpeg
+		// builds list every vendor's encoder whatever GPU is installed, so a
+		// listing check marked NVENC "available" on AMD machines and the wizard
+		// picked it (issue #3). Probes run concurrently to stay well inside
+		// DetectSystem's timeout.
+		probe := ffmpeg.ProbeFFmpegEncoder(ffmpegPath)
 		encoders := []struct {
-			name, typ, label, enc string
+			name, typ, label string
 		}{
-			{"h264_nvenc", "nvenc", "NVIDIA NVENC", "h264_nvenc"},
-			{"h264_qsv", "qsv", "Intel Quick Sync", "h264_qsv"},
-			{"h264_amf", "amf", "AMD AMF", "h264_amf"},
-			{"libx264", "cpu", "CPU (libx264)", "libx264"},
+			{"h264_nvenc", "nvenc", "NVIDIA NVENC"},
+			{"h264_qsv", "qsv", "Intel Quick Sync"},
+			{"h264_amf", "amf", "AMD AMF"},
+			{"libx264", "cpu", "CPU (libx264)"},
 		}
-		for _, e := range encoders {
-			avail := strings.Contains(encoderList, e.enc)
-			log.Printf("[detect] Encoder %s: available=%v", e.name, avail)
+		avail := make([]bool, len(encoders))
+		var wg sync.WaitGroup
+		for i, e := range encoders {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				avail[i] = probe(e.name)
+			}()
+		}
+		wg.Wait()
+		for i, e := range encoders {
+			log.Printf("[detect] Encoder %s: available=%v", e.name, avail[i])
 			info.Encoders = append(info.Encoders, server.EncoderInfo{
-				Name: e.name, Type: e.typ, Label: e.label, Available: avail,
+				Name: e.name, Type: e.typ, Label: e.label, Available: avail[i],
 			})
 		}
 	}
@@ -82,27 +92,6 @@ func fallbackSystemInfo() server.SystemInfo {
 		Monitors: []server.MonitorInfo{
 			{Index: 0, Name: "Primary Display", Resolution: "auto", IsPrimary: true},
 		},
-		AudioDevices: []server.AudioDevice{
-			{Name: "Default Output Device", IsDefault: true},
-		},
+		AudioDevices: []server.AudioDevice{server.SystemAudioDevice},
 	}
-}
-
-func runHidden(name string, args ...string) string {
-	log.Printf("[detect] runHidden: %s %v", name, args)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: 0x08000000,
-	}
-	out, err := cmd.Output()
-	if err != nil {
-		log.Printf("[detect] runHidden error: %v", err)
-		return ""
-	}
-	log.Printf("[detect] runHidden success: %d bytes", len(out))
-	return string(out)
 }

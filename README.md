@@ -69,7 +69,8 @@ Flags:
   --bitrate int         Video bitrate in kbps (default 4000)
   --encoder string      Encoder: auto, nvenc, qsv, amf, cpu (default "auto")
   --audio               Enable system audio capture
-  --audio-device string Specific audio device name
+  --audio-device string Capture only this output device, by name or endpoint ID
+                        (default: all system audio except VRChat)
 ```
 
 ### Examples

@@ -128,3 +128,59 @@ func TestAsyncWriterPassthrough(t *testing.T) {
 		t.Fatal("timeout waiting for audio data")
 	}
 }
+
+// gatedWriter blocks every Write until open is closed, like an OS pipe whose
+// reader (FFmpeg) has exited or not started yet.
+type gatedWriter struct {
+	writeCloser
+	open    chan struct{}
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedWriter) Write(p []byte) (int, error) {
+	g.once.Do(func() { close(g.entered) })
+	<-g.open
+	return g.writeCloser.Write(p)
+}
+
+// TestAsyncWriterDiscardDropsStaleAudio verifies that audio buffered while
+// FFmpeg isn't reading can be thrown away. Without this, every FFmpeg restart
+// (crash fallback, lag auto-restart, settings change) replays up to the full
+// buffer (~2.5s) of stale audio into the new process, leaving audio that far
+// behind video for the rest of the session (issue #3).
+func TestAsyncWriterDiscardDropsStaleAudio(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dst := &gatedWriter{open: make(chan struct{}), entered: make(chan struct{})}
+	aw := NewAsyncWriter(ctx, dst, 64)
+
+	aw.Write([]byte("[in-flight]"))
+	select {
+	case <-dst.entered: // drain goroutine is now blocked on the "pipe"
+	case <-time.After(2 * time.Second):
+		t.Fatal("drain never reached the underlying writer")
+	}
+	aw.Write([]byte("[stale-1]"))
+	aw.Write([]byte("[stale-2]"))
+
+	if n := aw.Discard(); n != 2 {
+		t.Errorf("Discard() = %d, want 2 buffered chunks dropped", n)
+	}
+
+	aw.Write([]byte("[fresh]"))
+	close(dst.open)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !bytes.Contains(dst.Bytes(), []byte("[fresh]")) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := dst.Bytes()
+	if !bytes.Contains(got, []byte("[fresh]")) {
+		t.Fatalf("audio written after Discard was not delivered; got %q", got)
+	}
+	if bytes.Contains(got, []byte("stale")) {
+		t.Errorf("stale audio was delivered after Discard; got %q", got)
+	}
+}

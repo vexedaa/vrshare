@@ -109,3 +109,24 @@ func TestManager_RestartOnCrash(t *testing.T) {
 		t.Error("should deny restart when at max")
 	}
 }
+
+// BeforeStart must run before every launch, including the manager's own crash
+// restarts, so the server can drop audio that piled up while no FFmpeg was
+// reading the pipe.
+func TestManager_BeforeStartRunsBeforeEveryAttempt(t *testing.T) {
+	calls := 0
+	m := &Manager{
+		FFmpegPath:   filepath.Join(t.TempDir(), "no-such-ffmpeg.exe"),
+		SegmentDir:   t.TempDir(),
+		MaxRestarts:  2,
+		RestartDelay: 1 * time.Millisecond,
+		BeforeStart:  func() { calls++ },
+	}
+
+	if err := m.Run(context.Background(), nil, nil); err == nil {
+		t.Fatal("expected Run to fail with a missing binary")
+	}
+	if calls != 3 {
+		t.Errorf("BeforeStart called %d times, want 3 (initial + 2 restarts)", calls)
+	}
+}

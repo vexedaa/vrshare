@@ -19,12 +19,12 @@
   onMount(async () => {
     try {
       systemInfo = await DetectSystem();
-      const bestEncoder = systemInfo.encoders?.find(e => e.available);
-      if (bestEncoder) encoder = bestEncoder.type;
+      // Leave the encoder on Auto: it is re-resolved on every start, so it keeps
+      // working if the GPU or drivers change. The Auto option names its pick.
       const primaryMonitor = systemInfo.monitors?.find(m => m.isPrimary);
       if (primaryMonitor) monitor = primaryMonitor.index;
       const defaultAudio = systemInfo.audioDevices?.find(d => d.isDefault);
-      if (defaultAudio) audioDevice = defaultAudio.name;
+      if (defaultAudio) audioDevice = defaultAudio.id;
     } catch (err) {
       console.error('Detection failed:', err);
     }
@@ -42,6 +42,10 @@
       console.error('Save failed:', err);
     }
   }
+
+  // What Auto resolves to: the first working encoder, in the same priority
+  // order the server uses (NVENC, Quick Sync, AMF, then CPU).
+  $: autoEncoderLabel = systemInfo?.encoders?.find(e => e.available && e.type !== 'auto')?.label;
 
   const resolutionOptions = ['1920x1080', '2560x1440', '1280x720'];
   const fpsOptions = [30, 60, 120];
@@ -62,7 +66,7 @@
       <div class="bg-slate-800 rounded-lg p-4">
         <div class="text-xs uppercase tracking-wide text-slate-500">Encoder</div>
         <select bind:value={encoder} class="mt-2 w-full bg-slate-900 text-slate-200 border border-slate-700 rounded px-2 py-1">
-          <option value="auto">Auto (best available)</option>
+          <option value="auto">Auto ({autoEncoderLabel || 'best available'})</option>
           {#each (systemInfo?.encoders || []) as enc}
             <option value={enc.type} disabled={!enc.available}>
               {enc.label} {enc.available ? '' : '(unavailable)'}
@@ -94,7 +98,7 @@
         {#if audioEnabled}
           <select bind:value={audioDevice} class="mt-2 w-full bg-slate-900 text-slate-200 border border-slate-700 rounded px-2 py-1">
             {#each (systemInfo?.audioDevices || []) as dev}
-              <option value={dev.name}>{dev.name}</option>
+              <option value={dev.id}>{dev.name}</option>
             {/each}
           </select>
         {/if}

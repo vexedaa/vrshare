@@ -78,8 +78,14 @@ type MonitorInfo struct {
 	IsPrimary  bool   `json:"isPrimary"`
 }
 
-// AudioDevice describes an audio output device.
+// AudioDevice is a selectable audio source: all system audio except VRChat
+// (ID "") or one output device (ID = its Windows endpoint ID).
 type AudioDevice struct {
+	ID        string `json:"id"`
 	Name      string `json:"name"`
 	IsDefault bool   `json:"isDefault"`
 }
+
+// SystemAudioDevice is the default audio source: everything playing on the PC
+// except VRChat itself.
+var SystemAudioDevice = AudioDevice{ID: "", Name: "All system audio (except VRChat)", IsDefault: true}

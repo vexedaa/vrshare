@@ -54,6 +54,7 @@ type Server struct {
 	encoder    string
 	segDir     string
 	audioPipe  *os.File
+	audio      *audioCapturer // nil when audio is disabled
 	logEntries []LogEntry
 	logSeq     uint64 // monotonic count of log lines ever emitted (for change detection)
 	logMu      sync.Mutex
@@ -106,8 +107,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.log("FFmpeg found: " + ffmpegPath)
 
 	// Probe encoder
-	probe := ffmpeg.ProbeFFmpegEncoder(ffmpegPath)
-	s.encoder = ffmpeg.ResolveEncoder(string(s.cfg.Encoder), probe)
+	s.resolveEncoder()
 	s.useDDAgrab = ffmpeg.ProbeDDAgrab(ffmpegPath)
 	s.log(fmt.Sprintf("Encoder: %s, DDAgrab: %v", s.encoder, s.useDDAgrab))
 
@@ -174,8 +174,9 @@ func (s *Server) Start(ctx context.Context) error {
 			return err
 		}
 		s.audioPipe = r
-		ac = newAudioCapturer(s.srvCtx, w)
+		ac = newAudioCapturer(s.srvCtx, w, s.cfg.AudioDevice)
 	}
+	s.audio = ac
 
 	// Start the tunnel if configured. A failure here is non-fatal: the stream
 	// still works over the local network and the failure is surfaced (TunnelError)
@@ -205,6 +206,31 @@ func (s *Server) Start(ctx context.Context) error {
 	s.log("Stream started")
 
 	return nil
+}
+
+// resolveEncoder picks the encoder for the configured choice, test-encoding to
+// confirm hardware encoders work. If an explicitly chosen encoder doesn't work
+// on this machine, it says so and uses the best one that does.
+func (s *Server) resolveEncoder() {
+	configured := string(s.cfg.Encoder)
+	probe := ffmpeg.ProbeFFmpegEncoder(s.ffmpegPath)
+	s.encoder = ffmpeg.ResolveEncoder(configured, probe)
+	if configured != "auto" && configured != s.encoder {
+		s.log(fmt.Sprintf("Encoder %s is not usable on this system — using %s instead", configured, s.encoder))
+	}
+}
+
+// discardStaleAudio drops audio that piled up while no FFmpeg was reading the
+// pipe (between a crash or restart and the next launch). Feeding that backlog
+// to the new process would leave audio that far behind video for the rest of
+// the session — up to the full ~2.5s buffer after a crash-loop fallback.
+func (s *Server) discardStaleAudio() {
+	if s.audio == nil {
+		return
+	}
+	if n := s.audio.discardStale(); n > 0 {
+		s.log(fmt.Sprintf("Audio: discarded %d stale chunks buffered while FFmpeg was restarting", n))
+	}
 }
 
 // startFFmpeg launches the FFmpeg process with current config.
@@ -252,6 +278,7 @@ func (s *Server) startFFmpeg() error {
 			mgr.StderrWriter = s.stats
 			mgr.LogFunc = func(msg string) { s.log("FFmpeg: " + msg) }
 			mgr.MaxRestarts = 2 // fewer retries per config before falling back
+			mgr.BeforeStart = s.discardStaleAudio
 
 			err := mgr.Run(ffCtx, args, s.audioPipe)
 			if ffCtx.Err() != nil {
@@ -290,8 +317,13 @@ func (s *Server) RestartCapture() error {
 	}
 
 	// Re-probe encoder in case config changed
-	probe := ffmpeg.ProbeFFmpegEncoder(s.ffmpegPath)
-	s.encoder = ffmpeg.ResolveEncoder(string(s.cfg.Encoder), probe)
+	s.resolveEncoder()
+
+	// Apply an audio source change. The capturer keeps running (it owns the
+	// pipe FFmpeg reads), so it just switches source in place.
+	if s.audio != nil {
+		s.audio.setDevice(s.cfg.AudioDevice)
+	}
 
 	// Relaunch FFmpeg. The AsyncWriter forwards audio unconditionally, so the
 	// new process begins receiving PCM as soon as it opens the pipe.
@@ -463,6 +495,7 @@ func (s *Server) Stop() error {
 		s.audioPipe.Close()
 		s.audioPipe = nil
 	}
+	s.audio = nil
 	// Shut down HTTP server
 	if s.httpSrv != nil {
 		s.httpSrv.Shutdown(context.Background())
@@ -555,6 +588,7 @@ func (s *Server) failStream(msg string) {
 		s.audioPipe.Close()
 		s.audioPipe = nil
 	}
+	s.audio = nil
 	// Shut down HTTP server to free the port
 	if s.httpSrv != nil {
 		s.httpSrv.Shutdown(context.Background())
