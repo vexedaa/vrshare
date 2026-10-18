@@ -43,6 +43,7 @@ type Server struct {
 	// FFmpeg-level context (can be restarted independently)
 	ffmpegCancel context.CancelFunc
 	ffmpegDone   chan struct{}
+	tsBase       time.Time // session start; every FFmpeg in the session rebases output timestamps to it
 
 	hlsSrv     *hls.Server
 	httpSrv    *http.Server
@@ -193,6 +194,9 @@ func (s *Server) Start(ctx context.Context) error {
 		go ac.start(s.srvCtx)
 	}
 
+	// One timestamp base for the whole session, so capture restarts continue
+	// the timeline instead of sending viewers' players back to zero.
+	s.tsBase = time.Now()
 	if err := s.startFFmpeg(); err != nil {
 		s.srvCancel()
 		s.httpSrv.Shutdown(context.Background())
@@ -273,7 +277,7 @@ func (s *Server) startFFmpeg() error {
 				s.log("FFmpeg: " + c.label)
 			}
 
-			args := ffmpeg.BuildArgs(s.cfg, c.encoder, s.segDir, c.useDDAgrab)
+			args := ffmpeg.BuildArgs(s.cfg, c.encoder, s.segDir, c.useDDAgrab, s.tsBase)
 			mgr := ffmpeg.NewManager(s.ffmpegPath, s.segDir)
 			mgr.StderrWriter = s.stats
 			mgr.LogFunc = func(msg string) { s.log("FFmpeg: " + msg) }
