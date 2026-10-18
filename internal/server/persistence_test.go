@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -23,6 +24,37 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	}
 	if loaded.Port != 9090 || loaded.FPS != 60 {
 		t.Errorf("loaded config mismatch: %+v", loaded)
+	}
+}
+
+// v1.0.5 users calibrated the audio sync offset against the old timing, where
+// every FFmpeg start added a random 250-400ms of audio lag and lost audio
+// pushed it the other way. Under the corrected timing those values are wrong,
+// so they must not carry over; offsets saved from now on must.
+func TestLoadConfigDropsSyncOffsetCalibratedForOldTiming(t *testing.T) {
+	dir := t.TempDir()
+	v105 := `{"port": 8080, "fps": 60, "bitrate": 4000, "encoder": "nvenc", "audio": true, "audioOffsetMs": -560}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(v105), 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if loaded.AudioOffsetMs != 0 {
+		t.Errorf("AudioOffsetMs = %d, want 0: a calibration for the old timing must be dropped", loaded.AudioOffsetMs)
+	}
+	if loaded.FPS != 60 {
+		t.Errorf("FPS = %d, want 60: the rest of the config must still load", loaded.FPS)
+	}
+
+	cfg := config.Default()
+	cfg.AudioOffsetMs = 120
+	if err := SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, _ := LoadConfig(dir); loaded.AudioOffsetMs != 120 {
+		t.Errorf("AudioOffsetMs after save/load = %d, want 120", loaded.AudioOffsetMs)
 	}
 }
 

@@ -25,7 +25,10 @@ type Config struct {
 	Encoder     EncoderType `json:"encoder"`
 	Audio       bool        `json:"audio"`
 	AudioGain   int         `json:"audioGain"`     // dB boost, 0 = no change, default 6
-	AudioOffsetMs int       `json:"audioOffsetMs"` // A/V sync correction: +ve = audio lags video (delays video to match); -ve = audio leads (delays audio)
+	// A/V sync correction: +ve = audio lags video (audio is moved earlier); -ve = audio leads (moved later).
+	// Stored under a new key because offsets saved by v1.0.5 and earlier were
+	// calibrated against A/V timing that has since been fixed.
+	AudioOffsetMs int       `json:"avSyncOffsetMs"`
 	AudioDevice string      `json:"audioDevice"`
 	Tunnel      string      `json:"tunnel"`
 }
