@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -124,5 +125,26 @@ func TestRestartKeepsSessionTimestampBase(t *testing.T) {
 	}
 	if len(offsets) != 2 || offsets[0] != offsets[1] {
 		t.Errorf("-output_ts_offset per launch = %q, want the same value for both launches", offsets)
+	}
+}
+
+func TestOverlappingRestartsLeaveOneFFmpeg(t *testing.T) {
+	s := streamingWithFakeFFmpeg(t)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			s.RestartCapture()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if n := runningFakeFFmpegs(t); n != 1 {
+		t.Errorf("%d FFmpeg processes running after two overlapping restarts, want 1", n)
 	}
 }

@@ -43,7 +43,8 @@ type Server struct {
 	// FFmpeg-level context (can be restarted independently)
 	ffmpegCancel context.CancelFunc
 	ffmpegDone   chan struct{}
-	tsBase       time.Time // session start; every FFmpeg in the session rebases output timestamps to it
+	captureMu    sync.Mutex // serializes RestartCapture with itself and with Stop
+	tsBase       time.Time  // session start; every FFmpeg in the session rebases output timestamps to it
 
 	hlsSrv     *hls.Server
 	httpSrv    *http.Server
@@ -303,8 +304,15 @@ func (s *Server) startFFmpeg() error {
 // RestartCapture stops only FFmpeg and relaunches it with current config.
 // The HLS server, tunnel, and audio capturer stay running.
 func (s *Server) RestartCapture() error {
+	// Two overlapping restarts would both wait on the same FFmpeg exit and then
+	// each launch a new FFmpeg, orphaning one that keeps capturing, encoding,
+	// reading the shared audio pipe and writing the same segment files until
+	// the stream is stopped.
+	s.captureMu.Lock()
+	defer s.captureMu.Unlock()
+
 	s.mu.Lock()
-	if s.status != "streaming" {
+	if s.status != "streaming" || s.srvCtx.Err() != nil {
 		s.mu.Unlock()
 		return fmt.Errorf("not streaming")
 	}
@@ -486,6 +494,9 @@ func (s *Server) Stop() error {
 	// process-tree kill must run before context cancellation kills only the
 	// parent and orphans the child. Serialized with startTunnel/RestartTunnel.
 	s.stopTunnel()
+	// Wait out any in-flight restart, so it can't launch an FFmpeg after the
+	// wait below; once the context is cancelled, queued restarts bail out.
+	s.captureMu.Lock()
 	// Cancel server context (stops FFmpeg, janitor, audio)
 	if s.srvCancel != nil {
 		s.srvCancel()
@@ -494,6 +505,7 @@ func (s *Server) Stop() error {
 	if s.ffmpegDone != nil {
 		<-s.ffmpegDone
 	}
+	s.captureMu.Unlock()
 	// Close audio pipe read-end (write-end is closed by AsyncWriter)
 	if s.audioPipe != nil {
 		s.audioPipe.Close()
