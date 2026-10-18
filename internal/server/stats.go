@@ -65,8 +65,11 @@ func (p *StatsParser) Write(data []byte) (int, error) {
 		}
 	}
 
+	// The passthrough is best-effort, so its failure is never reported:
+	// os/exec stops copying FFmpeg's stderr (closing the pipe) at the first
+	// failed Write, and in the windowsgui build os.Stderr is an invalid handle.
 	if p.inner != nil {
-		return p.inner.Write(data)
+		p.inner.Write(data)
 	}
 	return len(data), nil
 }

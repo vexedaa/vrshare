@@ -2,6 +2,7 @@ package ffmpeg
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,6 +109,29 @@ func TestManager_RestartOnCrash(t *testing.T) {
 	if m.shouldRestart() != false {
 		t.Error("should deny restart when at max")
 	}
+}
+
+// os/exec copies FFmpeg's stderr into stderrCapture and closes the pipe at the
+// first failed Write. The forward writer is best-effort (in the GUI build it
+// ends at os.Stderr, an invalid handle), so its errors must never fail the
+// capture's Write — otherwise FFmpeg's stderr is cut off after one write and
+// Run reports a clean exit as "write /dev/stderr: The handle is invalid".
+func TestStderrCaptureIgnoresForwardErrors(t *testing.T) {
+	c := stderrCapture{limit: 4096, forward: failingWriter{}}
+	for _, chunk := range []string{"ffmpeg version git", "-2026\n", "Conversion failed!\n"} {
+		if n, err := c.Write([]byte(chunk)); n != len(chunk) || err != nil {
+			t.Fatalf("Write(%q) = (%d, %v), want (%d, nil)", chunk, n, err, len(chunk))
+		}
+	}
+	if got := c.String(); got != "ffmpeg version git-2026\nConversion failed!\n" {
+		t.Errorf("captured %q, want every chunk", got)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write /dev/stderr: The handle is invalid.")
 }
 
 // BeforeStart must run before every launch, including the manager's own crash

@@ -201,8 +201,10 @@ func (s *stderrCapture) Write(p []byte) (int, error) {
 	}
 	s.mu.Unlock()
 
+	// Forwarding is best-effort: os/exec closes FFmpeg's stderr pipe at the
+	// first Write that fails, so a failing forward writer must not fail this one.
 	if s.forward != nil {
-		return s.forward.Write(p)
+		s.forward.Write(p)
 	}
 	return len(p), nil
 }
