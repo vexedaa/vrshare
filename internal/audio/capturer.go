@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 )
@@ -101,6 +102,16 @@ func (c *Capturer) captureLoop(ctx context.Context) {
 		defer procCoUninitialize.Call()
 	} else {
 		defer procRoUninitialize.Call()
+	}
+
+	// Real-time scheduling for this (locked) thread. Process loopback always
+	// runs a 10ms buffer, and while a game loads the CPU a normal-priority
+	// thread misses refills, losing audio without any discontinuity flag.
+	var taskIndex uint32
+	if task, _, err := procAvSetMmThreadCharacteristicsW.Call(uintptr(unsafe.Pointer(proAudioTask)), uintptr(unsafe.Pointer(&taskIndex))); task != 0 {
+		defer procAvRevertMmThreadCharacteristics.Call(task)
+	} else {
+		log.Printf("Audio: couldn't give the capture thread real-time priority: %v", err)
 	}
 
 	lastErr := ""    // last failure logged, so a persistent one isn't logged every retry
@@ -288,7 +299,15 @@ func (c *Capturer) activateLoopback(excludePID uint32) (uintptr, error) {
 // bufDuration is the stream buffer in 100ns units (0 = engine default).
 func (c *Capturer) runCaptureSession(ctx context.Context, audioClient uintptr, bufDuration int64) error {
 	format := PCM16Stereo48kHz()
-	flags := uint32(AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY)
+	// Event-driven: the engine signals every period, so each packet is read as
+	// soon as it exists instead of on a timer that can fall behind the buffer.
+	flags := uint32(AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY)
+
+	event, _, err := procCreateEventW.Call(0, 0, 0, 0) // auto-reset, initially unsignaled
+	if event == 0 {
+		return fmt.Errorf("CreateEvent failed: %v", err)
+	}
+	defer syscall.CloseHandle(syscall.Handle(event))
 
 	hr, _ := comCall(audioClient, 3, // Initialize
 		uintptr(AUDCLNT_SHAREMODE_SHARED),
@@ -300,6 +319,9 @@ func (c *Capturer) runCaptureSession(ctx context.Context, audioClient uintptr, b
 	)
 	if hr != 0 {
 		return fmt.Errorf("IAudioClient.Initialize failed: 0x%x", hr)
+	}
+	if hr, _ := comCall(audioClient, 13, event); hr != 0 { // SetEventHandle
+		return fmt.Errorf("IAudioClient.SetEventHandle failed: 0x%x", hr)
 	}
 
 	var captureClient uintptr
@@ -318,17 +340,16 @@ func (c *Capturer) runCaptureSession(ctx context.Context, audioClient uintptr, b
 	}
 	defer comCall(audioClient, 11) // Stop
 
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
 	for {
+		// The timeout only bounds how long a stop takes to be noticed.
+		syscall.WaitForSingleObject(syscall.Handle(event), 100)
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			if err := c.readBuffers(captureClient); err != nil {
-				return err
-			}
+		default:
+		}
+		if err := c.readBuffers(captureClient); err != nil {
+			return err
 		}
 	}
 }

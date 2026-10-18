@@ -16,7 +16,15 @@ var (
 	procRoInitialize                = modcombase.NewProc("RoInitialize")
 	procRoUninitialize              = modcombase.NewProc("RoUninitialize")
 	procActivateAudioInterfaceAsync = modmmdevapi.NewProc("ActivateAudioInterfaceAsync")
+
+	modavrt                             = syscall.NewLazyDLL("avrt.dll")
+	procAvSetMmThreadCharacteristicsW   = modavrt.NewProc("AvSetMmThreadCharacteristicsW")
+	procAvRevertMmThreadCharacteristics = modavrt.NewProc("AvRevertMmThreadCharacteristics")
+	procCreateEventW                    = modkernel32.NewProc("CreateEventW")
 )
+
+// proAudioTask is the MMCSS task that gives a thread real-time scheduling.
+var proAudioTask = syscall.StringToUTF16Ptr("Pro Audio")
 
 // COM threading model
 const coINIT_MULTITHREADED = 0x0
@@ -28,6 +36,7 @@ const (
 	PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE = 1
 	AUDCLNT_SHAREMODE_SHARED                          = 0
 	AUDCLNT_STREAMFLAGS_LOOPBACK                      = 0x00020000
+	AUDCLNT_STREAMFLAGS_EVENTCALLBACK                 = 0x00040000
 	AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM                = 0x80000000
 	AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY           = 0x08000000
 	WAVE_FORMAT_PCM                                   = 1
