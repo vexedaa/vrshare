@@ -238,8 +238,8 @@
         </div>
       </div>
       <div class="mt-3">
-        <label class="text-xs text-slate-400 block mb-1">Audio sync offset ({config.audioOffsetMs ?? 0} ms)</label>
-        <input type="range" bind:value={config.audioOffsetMs} min="-1000" max="1000" step="10"
+        <label class="text-xs text-slate-400 block mb-1">Audio sync offset ({config.avSyncOffsetMs ?? 0} ms)</label>
+        <input type="range" bind:value={config.avSyncOffsetMs} min="-1000" max="1000" step="10"
           class="w-full accent-sky-500" />
         <div class="flex justify-between text-xs text-slate-600 mt-0.5">
           <span>audio earlier</span>

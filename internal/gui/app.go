@@ -240,48 +240,24 @@ func (a *App) ReadSessionLog(name string) (string, error) {
 	return server.ReadSessionLog(a.dataDir, name)
 }
 
-// startStatsTicker emits stream:state events every second and monitors
-// encoding speed to auto-restart FFmpeg when it falls behind and recovers.
+// startStatsTicker emits stream:state events every second. A slowdown needs no
+// capture restart: audio and video share one clock, so the stream realigns by
+// itself once FFmpeg catches up, while a restart would interrupt every viewer.
 func (a *App) startStatsTicker() {
 	a.ticker = time.NewTicker(1 * time.Second)
 	a.done = make(chan struct{})
 	go func() {
-		var slowTicks int    // consecutive ticks where speed < 0.9
-		var recoveredTicks int // consecutive ticks where speed >= 0.95 after a lag
-		var lastRestart time.Time
 		var lastLogSeq uint64
 
 		for {
 			select {
 			case <-a.ticker.C:
-				state := a.srv.State()
-				runtime.EventsEmit(a.ctx, "stream:state", state)
+				runtime.EventsEmit(a.ctx, "stream:state", a.srv.State())
 				// Only ship the log buffer when it actually changed, so an idle
 				// stream doesn't re-marshal and re-render the same lines every tick.
 				if seq := a.srv.LogSeq(); seq != lastLogSeq {
 					lastLogSeq = seq
 					runtime.EventsEmit(a.ctx, "stream:log", a.srv.LogEntries())
-				}
-
-				// Lag detection: restart FFmpeg when it recovers from sustained slowdown
-				if state.Status == "streaming" && state.Speed > 0 {
-					if state.Speed < 0.9 {
-						slowTicks++
-						recoveredTicks = 0
-					} else if slowTicks >= 3 && state.Speed >= 0.95 {
-						// Was slow for 3+ seconds, now recovered
-						recoveredTicks++
-						if recoveredTicks >= 2 && time.Since(lastRestart) > 30*time.Second {
-							log.Printf("Auto-restarting capture after %ds of lag (speed recovered to %.2fx)", slowTicks, state.Speed)
-							go a.srv.RestartCapture()
-							slowTicks = 0
-							recoveredTicks = 0
-							lastRestart = time.Now()
-						}
-					} else {
-						slowTicks = 0
-						recoveredTicks = 0
-					}
 				}
 			case <-a.done:
 				return

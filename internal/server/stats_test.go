@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -76,6 +77,37 @@ func TestStatsParserCarriageReturn(t *testing.T) {
 	if s.FPS != 30.0 {
 		t.Errorf("FPS = %f, want 30.0 (carriage return delimiter)", s.FPS)
 	}
+}
+
+// In the windowsgui build os.Stderr is an invalid handle, so the passthrough
+// fails on every write. If that error escapes Write, os/exec's stderr copier
+// stops and closes FFmpeg's stderr pipe after FFmpeg's very first write: no
+// FFmpeg log lines and no stats for the rest of the session.
+func TestStatsParserKeepsParsingWhenPassthroughFails(t *testing.T) {
+	var lines []string
+	p := NewStatsParser(failingWriter{})
+	p.LogFunc = func(line string) { lines = append(lines, line) }
+
+	// FFmpeg's first stderr write is the banner's opening fragment, without a newline.
+	first := []byte("ffmpeg version git-2026-03-24-92d06a8")
+	if n, err := p.Write(first); n != len(first) || err != nil {
+		t.Fatalf("Write = (%d, %v), want (%d, nil): a passthrough failure must not fail the write", n, err, len(first))
+	}
+	p.Write([]byte(" Copyright (c) 2000-2026 the FFmpeg developers\n"))
+	p.Write([]byte("frame=  120 fps= 60 q=27.0 size=N/A time=00:00:02.00 bitrate=N/A dup=0 drop=0 speed=1.00x\r"))
+
+	if len(lines) != 1 || lines[0] != "ffmpeg version git-2026-03-24-92d06a8 Copyright (c) 2000-2026 the FFmpeg developers" {
+		t.Errorf("logged lines = %q, want the reassembled banner line", lines)
+	}
+	if got := p.Latest().FPS; got != 60 {
+		t.Errorf("FPS = %v, want 60 (parsing must continue after passthrough failures)", got)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write /dev/stderr: The handle is invalid.")
 }
 
 type sliceWriter struct{ buf *[]byte }

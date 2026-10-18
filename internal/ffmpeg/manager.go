@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const aboveNormalPriorityClass = 0x00008000 // ABOVE_NORMAL_PRIORITY_CLASS process creation flag
+
 type Manager struct {
 	FFmpegPath   string
 	SegmentDir   string
@@ -117,7 +119,9 @@ func (m *Manager) Run(ctx context.Context, args []string, audioPipe *os.File) er
 		}
 
 		m.cmd = exec.CommandContext(ctx, m.FFmpegPath, args...)
-		m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		// Above-normal priority: while a game loads the CPU, a normal-priority
+		// FFmpeg is starved for seconds at a time and the stream stalls.
+		m.cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: aboveNormalPriorityClass}
 		m.cmd.Stderr = &stderrBuf
 		if audioPipe != nil {
 			m.cmd.Stdin = audioPipe
@@ -201,8 +205,10 @@ func (s *stderrCapture) Write(p []byte) (int, error) {
 	}
 	s.mu.Unlock()
 
+	// Forwarding is best-effort: os/exec closes FFmpeg's stderr pipe at the
+	// first Write that fails, so a failing forward writer must not fail this one.
 	if s.forward != nil {
-		return s.forward.Write(p)
+		s.forward.Write(p)
 	}
 	return len(p), nil
 }
